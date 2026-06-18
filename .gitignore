@@ -1,0 +1,35 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/bin/
+/dist/
+adk-go-sample
+
+# Test & coverage
+*.test
+*.out
+coverage.*
+
+# Go workspace
+go.work
+go.work.sum
+
+# Env / secrets / credentials
+.env
+.env.*
+*.pem
+*.key
+credentials*.json
+service-account*.json
+token.json
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+
+# Logs
+*.log

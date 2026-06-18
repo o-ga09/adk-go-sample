@@ -1,0 +1,119 @@
+name: build-and-deploy
+
+# このリポジトリの責務:
+#   1. コンテナイメージを build して Google Artifact Registry (GAR) へ push
+#   2. インフラリポジトリの生 manifest 内の image tag を yq で書き換え、main へ直 push
+# k8s マニフェスト自体はインフラリポジトリ側で管理する。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
+      - ".github/workflows/build-and-deploy.yml"
+  workflow_dispatch: {}
+
+# --- 必要な設定 ---------------------------------------------------------------
+# Repository Variables (Settings > Secrets and variables > Actions > Variables):
+#   GAR_LOCATION       例: asia-northeast1
+#   GCP_PROJECT        GCP プロジェクト ID
+#   GAR_REPOSITORY     Artifact Registry のリポジトリ名
+#   IMAGE_NAME         例: adk-go-sample
+#   INFRA_REPO         例: o-ga09/home-k8s-infra
+#   INFRA_API_MANIFEST    infra リポ内の API Deployment の相対パス 例: apps/secretary/api-deployment.yaml
+#   INFRA_CRON_MANIFEST   infra リポ内の Argo CronWorkflow の相対パス 例: apps/secretary/cronworkflow.yaml
+# Repository Secrets:
+#   GCP_WIF_PROVIDER   Workload Identity Provider のリソース名
+#                      (projects/<num>/locations/global/workloadIdentityPools/<pool>/providers/<provider>)
+#   GCP_SA_EMAIL       デプロイ用サービスアカウントの email
+#   INFRA_REPO_TOKEN   インフラリポへ push できる PAT (contents:write)
+# -----------------------------------------------------------------------------
+
+env:
+  IMAGE: ${{ vars.GAR_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT }}/${{ vars.GAR_REPOSITORY }}/${{ vars.IMAGE_NAME }}
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Workload Identity Federation 用
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tag
+        id: meta
+        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          token_format: access_token
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+      - name: Log in to Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.GAR_LOCATION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  update-infra:
+    needs: build-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout infra repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.INFRA_REPO }}
+          token: ${{ secrets.INFRA_REPO_TOKEN }}
+          path: infra
+
+      - name: Update image tag in manifests
+        working-directory: infra
+        env:
+          NEW_IMAGE: ${{ env.IMAGE }}:${{ needs.build-push.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # ubuntu-latest には mikefarah yq (v4) がプリインストール済み。
+          # API Deployment (container name: api)
+          yq -i '(.spec.template.spec.containers[] | select(.name == "api") | .image) = strenv(NEW_IMAGE)' \
+            "${{ vars.INFRA_API_MANIFEST }}"
+          # Argo CronWorkflow (template name: run-batch)
+          yq -i '(.spec.workflowSpec.templates[] | select(.name == "run-batch") | .container.image) = strenv(NEW_IMAGE)' \
+            "${{ vars.INFRA_CRON_MANIFEST }}"
+
+      - name: Commit and push
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no image changes"
+            exit 0
+          fi
+          git commit -m "chore(secretary): update image to ${{ needs.build-push.outputs.tag }}"
+          git push origin HEAD:main
