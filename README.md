@@ -58,8 +58,9 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
    ```
 5. **UI/API サーバ(dev, Web UI 付き)**:
    ```sh
-   go run ./cmd/api web        # http://localhost:8080
+   go run ./cmd/api web api webui   # http://localhost:8080
    ```
+   ADK の `web` は HTTP サーバ本体で、起動するサブサーバ(`api`=REST API / `a2a` / `webui`=開発用UI)を引数で明示指定する必要がある(指定漏れだと `no active sublaunchers found` で起動失敗)。本番は `ADK_LAUNCHER=prod ./api web api a2a`(webui なし)。
    API 直叩きの例:
    ```sh
    curl -N -XPOST localhost:8080/run_sse -H 'Content-Type: application/json' -d '{

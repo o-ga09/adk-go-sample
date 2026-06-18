@@ -15,4 +15,9 @@ COPY --from=build /out/api   /app/api
 COPY --from=build /out/batch /app/batch
 COPY --from=build /out/oauth /app/oauth
 # Default to the API server; the batch Job overrides the command.
+# The ADK web launcher needs its sublaunchers (api/a2a) listed explicitly,
+# even in prod (ADK_LAUNCHER=prod). CMD supplies them as default args so the
+# image runs standalone; k8s may still override args if needed.
+ENV ADK_LAUNCHER=prod
 ENTRYPOINT ["/app/api"]
+CMD ["web", "api", "a2a"]
