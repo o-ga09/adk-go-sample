@@ -28,7 +28,7 @@ func Tools(svc *calendar.Service, mode config.ActionMode) ([]tool.Tool, error) {
 }
 
 type createInput struct {
-	Summary     string `json:"summary"`
+	Summary      string `json:"summary"`
 	StartRFC3339 string `json:"startRFC3339"`
 	EndRFC3339   string `json:"endRFC3339"`
 	Description  string `json:"description"`

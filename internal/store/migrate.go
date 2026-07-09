@@ -22,15 +22,20 @@ import (
 // ADK's stale-session check on the next AppendEvent. Microsecond columns
 // combined with the timeTruncate=1µs DSN option (see store.go) guarantee the
 // stored time is never ahead of the in-memory one.
+//
+// The precision:6 tag must accompany type:datetime(6): GORM's migrator
+// compares the column's datetime_precision against field.Precision (not the
+// type string), so without it AutoMigrate silently skips the ALTER on tables
+// that already exist with datetime(3) columns.
 
 // sessionSchema mirrors storageSession ('sessions' table).
 type sessionSchema struct {
-	AppName    string `gorm:"primaryKey"`
-	UserID     string `gorm:"primaryKey"`
-	ID         string `gorm:"primaryKey"`
+	AppName    string    `gorm:"primaryKey"`
+	UserID     string    `gorm:"primaryKey"`
+	ID         string    `gorm:"primaryKey"`
 	State      string    `gorm:"type:longtext"`
-	CreateTime time.Time `gorm:"type:datetime(6)"`
-	UpdateTime time.Time `gorm:"type:datetime(6)"`
+	CreateTime time.Time `gorm:"type:datetime(6);precision:6"`
+	UpdateTime time.Time `gorm:"type:datetime(6);precision:6"`
 }
 
 func (sessionSchema) TableName() string { return "sessions" }
@@ -50,7 +55,7 @@ type eventSchema struct {
 	Actions                []byte
 	LongRunningToolIDsJSON string `gorm:"type:longtext"`
 	Branch                 *string
-	Timestamp              time.Time `gorm:"type:datetime(6)"`
+	Timestamp              time.Time `gorm:"type:datetime(6);precision:6"`
 
 	Content           string `gorm:"type:longtext"`
 	GroundingMetadata string `gorm:"type:longtext"`
@@ -71,7 +76,7 @@ func (eventSchema) TableName() string { return "events" }
 type appStateSchema struct {
 	AppName    string    `gorm:"primaryKey"`
 	State      string    `gorm:"type:longtext"`
-	UpdateTime time.Time `gorm:"type:datetime(6)"`
+	UpdateTime time.Time `gorm:"type:datetime(6);precision:6"`
 }
 
 func (appStateSchema) TableName() string { return "app_states" }
@@ -81,7 +86,7 @@ type userStateSchema struct {
 	AppName    string    `gorm:"primaryKey"`
 	UserID     string    `gorm:"primaryKey"`
 	State      string    `gorm:"type:longtext"`
-	UpdateTime time.Time `gorm:"type:datetime(6)"`
+	UpdateTime time.Time `gorm:"type:datetime(6);precision:6"`
 }
 
 func (userStateSchema) TableName() string { return "user_states" }
