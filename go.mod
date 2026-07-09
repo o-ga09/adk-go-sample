@@ -3,6 +3,7 @@ module github.com/o-ga09/adk-go-sample
 go 1.25.8
 
 require (
+	github.com/go-sql-driver/mysql v1.8.1
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/adk v0.1.0
 	google.golang.org/api v0.285.0
@@ -23,7 +24,6 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/go-sql-driver/mysql v1.8.1 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/jsonschema-go v0.3.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
