@@ -15,15 +15,22 @@ import (
 // gorm:"type:longtext" tags reproduce what the ADK's stateMap/dynamicJSON
 // custom types emit for the MySQL dialect. Keep them in sync when upgrading
 // the adk module.
+//
+// All time columns must be datetime(6), not GORM's default datetime(3):
+// MySQL rounds sub-precision fractions, so a millisecond column can store a
+// value *newer* than the in-memory nanosecond timestamp, which trips the
+// ADK's stale-session check on the next AppendEvent. Microsecond columns
+// combined with the timeTruncate=1µs DSN option (see store.go) guarantee the
+// stored time is never ahead of the in-memory one.
 
 // sessionSchema mirrors storageSession ('sessions' table).
 type sessionSchema struct {
 	AppName    string `gorm:"primaryKey"`
 	UserID     string `gorm:"primaryKey"`
 	ID         string `gorm:"primaryKey"`
-	State      string `gorm:"type:longtext"`
-	CreateTime time.Time
-	UpdateTime time.Time
+	State      string    `gorm:"type:longtext"`
+	CreateTime time.Time `gorm:"type:datetime(6)"`
+	UpdateTime time.Time `gorm:"type:datetime(6)"`
 }
 
 func (sessionSchema) TableName() string { return "sessions" }
@@ -43,7 +50,7 @@ type eventSchema struct {
 	Actions                []byte
 	LongRunningToolIDsJSON string `gorm:"type:longtext"`
 	Branch                 *string
-	Timestamp              time.Time
+	Timestamp              time.Time `gorm:"type:datetime(6)"`
 
 	Content           string `gorm:"type:longtext"`
 	GroundingMetadata string `gorm:"type:longtext"`
@@ -62,19 +69,19 @@ func (eventSchema) TableName() string { return "events" }
 
 // appStateSchema mirrors storageAppState ('app_states' table).
 type appStateSchema struct {
-	AppName    string `gorm:"primaryKey"`
-	State      string `gorm:"type:longtext"`
-	UpdateTime time.Time
+	AppName    string    `gorm:"primaryKey"`
+	State      string    `gorm:"type:longtext"`
+	UpdateTime time.Time `gorm:"type:datetime(6)"`
 }
 
 func (appStateSchema) TableName() string { return "app_states" }
 
 // userStateSchema mirrors storageUserState ('user_states' table).
 type userStateSchema struct {
-	AppName    string `gorm:"primaryKey"`
-	UserID     string `gorm:"primaryKey"`
-	State      string `gorm:"type:longtext"`
-	UpdateTime time.Time
+	AppName    string    `gorm:"primaryKey"`
+	UserID     string    `gorm:"primaryKey"`
+	State      string    `gorm:"type:longtext"`
+	UpdateTime time.Time `gorm:"type:datetime(6)"`
 }
 
 func (userStateSchema) TableName() string { return "user_states" }
