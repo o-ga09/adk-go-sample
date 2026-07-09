@@ -6,8 +6,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/o-ga09/adk-go-sample/internal/config"
 	gmailagent "github.com/o-ga09/adk-go-sample/internal/agents/gmail"
+	"github.com/o-ga09/adk-go-sample/internal/config"
 	googleapi "github.com/o-ga09/adk-go-sample/internal/google"
 	"github.com/o-ga09/adk-go-sample/internal/store"
 	"google.golang.org/adk/agent"
