@@ -26,6 +26,7 @@ on:
 #   INFRA_REPO         例: o-ga09/home-k8s-infra
 #   INFRA_API_MANIFEST    infra リポ内の API Deployment の相対パス 例: apps/secretary/api-deployment.yaml
 #   INFRA_CRON_MANIFEST   infra リポ内の Argo CronWorkflow の相対パス 例: apps/secretary/cronworkflow.yaml
+#   INFRA_MIGRATION_MANIFEST  infra リポ内のマイグレーション Job の相対パス 例: manifests/secretary/migration-job.yaml
 # Repository Secrets:
 #   GCP_WIF_PROVIDER   Workload Identity Provider のリソース名
 #                      (projects/<num>/locations/global/workloadIdentityPools/<pool>/providers/<provider>)
@@ -103,6 +104,9 @@ jobs:
           # Argo CronWorkflow (template name: run-batch)
           yq -i '(.spec.workflowSpec.templates[] | select(.name == "run-batch") | .container.image) = strenv(NEW_IMAGE)' \
             "${{ vars.INFRA_CRON_MANIFEST }}"
+          # Migration Job (container name: migration)
+          yq -i '(.spec.template.spec.containers[] | select(.name == "migration") | .image) = strenv(NEW_IMAGE)' \
+            "${{ vars.INFRA_MIGRATION_MANIFEST }}"
 
       - name: Commit and push
         working-directory: infra
