@@ -1,0 +1,44 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+A personal secretary agent built with ADK for Go (`google.golang.org/adk`) + Gemini. The first feature is a Gmail triage agent: it classifies incoming mail into "needs review / unwanted / has schedule", labels unwanted mail, registers events in Google Calendar, and sends a summary via LINE. README.md (Japanese) has the full env-var table and setup walkthrough.
+
+## Commands
+
+```sh
+go build ./...                       # build everything
+go vet ./...                        # lint (no other linter configured; no tests exist yet)
+
+ACTION_MODE=dry_run go run ./cmd/batch   # one-shot agent run, no real changes
+go run ./cmd/api web api webui           # dev server with Web UI at :8080
+go run ./cmd/oauth                       # one-time local helper to obtain a refresh token
+go run ./cmd/migrate -command up         # create/update MySQL session tables (needs MYSQL_DSN)
+```
+
+Required env for the agent to actually run: `GOOGLE_API_KEY`, `GOOGLE_OAUTH_CLIENT_ID/_SECRET/_REFRESH_TOKEN` (see README). Without `MYSQL_DSN` sessions are in-memory, which is fine locally.
+
+**ADK launcher gotcha**: the `web` launcher requires its sublaunchers listed explicitly as args (`api`, `a2a`, `webui`). Omitting them fails with `no active sublaunchers found`. Prod runs headless via `ADK_LAUNCHER=prod ./api web api a2a` (the Dockerfile bakes this in as ENTRYPOINT/CMD).
+
+## Architecture
+
+Four entry points in `cmd/` share one dependency builder, `internal/app.Build()`, which assembles: Gemini model → Google OAuth clients (`internal/google`) → the gmail agent → session service. Anything wired into both the API server and the batch belongs there.
+
+- `cmd/api` — always-on ADK REST API server (`POST /run`, `/run_sse`) for a k8s Deployment.
+- `cmd/batch` — one-shot `runner.Run()` invocation, triggered by an ArgoWorkflows CronWorkflow. Creates its own session (`cron-<timestamp>`) before running, because `runner.Run` requires an existing session.
+- `cmd/migrate` — schema migration, run as an ArgoCD PreSync Job before pods roll out.
+- `cmd/oauth` — local-only refresh-token helper.
+
+The agent (`internal/agents/gmail`) is an `llmagent` whose behavior is driven entirely by its instruction prompt (in Japanese — user-facing output is Japanese) plus function tools from `internal/tools/{gmail,calendar,notify}`. Safety is enforced at the tool layer, not just in the prompt — see `.claude/rules/action-mode-safety.md`.
+
+`internal/agents/llmauditor.go` and `image_generator.go` are standalone sample agents not wired into the app.
+
+## Rules
+
+Situational invariants live in `.claude/rules/`:
+
+- `action-mode-safety.md` — ACTION_MODE gating; applies when adding or changing agent tools.
+- `mysql-sessions.md` — timestamp-precision invariants in `internal/store`; applies when touching the store or upgrading the ADK module.
+- `ci-cd-contract.md` — the cross-repo GitOps contract; applies when touching the workflow or Dockerfile.
