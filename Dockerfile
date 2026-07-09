@@ -5,15 +5,17 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/api    ./cmd/api  \
- && CGO_ENABLED=0 go build -o /out/batch  ./cmd/batch \
- && CGO_ENABLED=0 go build -o /out/oauth  ./cmd/oauth
+RUN CGO_ENABLED=0 go build -o /out/api     ./cmd/api  \
+ && CGO_ENABLED=0 go build -o /out/batch   ./cmd/batch \
+ && CGO_ENABLED=0 go build -o /out/oauth   ./cmd/oauth \
+ && CGO_ENABLED=0 go build -o /out/migrate ./cmd/migrate
 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
-COPY --from=build /out/api   /app/api
-COPY --from=build /out/batch /app/batch
-COPY --from=build /out/oauth /app/oauth
+COPY --from=build /out/api     /app/api
+COPY --from=build /out/batch   /app/batch
+COPY --from=build /out/oauth   /app/oauth
+COPY --from=build /out/migrate /app/migrate
 # Default to the API server; the batch Job overrides the command.
 # The ADK web launcher needs its sublaunchers (api/a2a) listed explicitly,
 # even in prod (ADK_LAUNCHER=prod). CMD supplies them as default args so the
