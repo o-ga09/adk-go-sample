@@ -7,6 +7,8 @@ The ADK's database session service rejects `AppendEvent` on a "stale" session if
 
 Do not remove the `timeTruncate` option or downgrade any time column below `datetime(6)`.
 
+Every time column tag must be `gorm:"type:datetime(6);precision:6"` — **both parts**. AutoMigrate decides whether to ALTER an existing column by comparing the DB's `datetime_precision` against `field.Precision` (from the `precision` tag), not the `type` string; with `type:datetime(6)` alone it silently leaves pre-existing `datetime(3)` columns untouched (this caused a prod stale-session recurrence on 2026-07-09).
+
 `migrate.go` hand-mirrors the ADK's **unexported** storage structs (`google.golang.org/adk/session/database/storage_session.go`) field-for-field, because the ADK never runs AutoMigrate outside its own tests. **When upgrading the `google.golang.org/adk` module, diff these schema structs against upstream and update them.** The `gorm:"type:longtext"` tags reproduce what the ADK's custom types emit for the MySQL dialect.
 
 The `events` table intentionally has no foreign-key association to `sessions`: the ADK deletes only the session row, so a RESTRICT constraint would break session deletion.
