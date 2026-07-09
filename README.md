@@ -5,7 +5,8 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 - 受信メールを「要確認 / 不要 / 予定あり」に分類
 - 不要メールに Gmail ラベルを付与(※当面は**削除しない**)
 - 予定は Google カレンダーへ登録
-- 結果の要約を **LINE** に通知
+- 結果の要約を **Slack** に通知(LINE 通知基盤も残置。フォールバックとして利用可)
+- Slack で bot に **@メンション**すると、その場でエージェントを呼び出せる(Socket Mode)
 - 定期実行は **ArgoWorkflows CronWorkflow**、UI は **ADK REST API**(`POST /run`, `/run_sse`)で接続
 
 ## 構成
@@ -16,7 +17,8 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 | `cmd/batch` | cron 用ワンショット。`runner.Run()` を1回実行して終了(Argo Job)。 |
 | `cmd/oauth` | 個人 Gmail の OAuth refresh token を取得するローカル用ヘルパ。 |
 | `internal/agents/gmail` | Gmail 整理 LLM エージェント定義。 |
-| `internal/tools/{gmail,calendar,notify}` | ADK function tools(Gmail / Calendar / LINE)。 |
+| `internal/tools/{gmail,calendar,notify}` | ADK function tools(Gmail / Calendar / Slack・LINE)。 |
+| `internal/slackbot` | Slack Socket Mode リスナー(`@メンション`→エージェント実行→スレッド返信)。`cmd/api` 内で起動。 |
 | `internal/google` | OAuth から Gmail/Calendar クライアント生成。 |
 | `internal/store` | MySQL バックエンドの session.Service(未設定時は in-memory)。 |
 | `internal/app` | 上記を組み立てる共有ビルダー。 |
@@ -34,7 +36,11 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 | `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | OAuth クライアント | (必須) |
 | `GOOGLE_OAUTH_REFRESH_TOKEN` | `cmd/oauth` で取得 | (必須) |
 | `MYSQL_DSN` | 例 `user:pass@tcp(mysql:3306)/secretary?parseTime=true`。空なら in-memory | "" |
-| `LINE_CHANNEL_TOKEN` / `LINE_TARGET_USER_ID` | LINE Messaging API | "" |
+| `SLACK_WEBHOOK_URL` | Slack Incoming Webhook URL(通知の既定チャネル) | "" |
+| `SLACK_BOT_TOKEN` | Slack Bot Token(`xoxb-...`)。返信の投稿に使用 | "" |
+| `SLACK_APP_TOKEN` | Slack App-Level Token(`xapp-...`)。Socket Mode 接続に使用 | "" |
+| `SLACK_ALLOWED_USER_ID` | この Slack ユーザー ID からのメンションのみ受け付ける | "" (無指定なら全員可) |
+| `LINE_CHANNEL_TOKEN` / `LINE_TARGET_USER_ID` | LINE Messaging API(フォールバック) | "" |
 | `GMAIL_QUERY` | 整理対象の Gmail 検索クエリ | `in:inbox is:unread newer_than:1d` |
 | `ACTION_MODE` | `dry_run` \| `label_only` \| `auto_trash` | `label_only` |
 | `APP_NAME` | ADK アプリ名(UI の appName) | `gmail_secretary` |
@@ -51,7 +57,7 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
    ```sh
    ACTION_MODE=dry_run go run ./cmd/batch
    ```
-   ログで分類結果・付与予定ラベル・カレンダー登録予定・LINE 文面を確認(実変更なし)。
+   ログで分類結果・付与予定ラベル・カレンダー登録予定・Slack 通知文面を確認(実変更なし)。
 4. **本番モード(label_only)**:
    ```sh
    ACTION_MODE=label_only go run ./cmd/batch
@@ -68,6 +74,12 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
      "newMessage":{"role":"user","parts":[{"text":"受信トレイを整理して通知して"}]}
    }'
    ```
+6. **Slack から呼び出す(任意)**: Slack App を作成し、Socket Mode を有効化。
+   - Bot Token Scopes に `app_mentions:read` / `chat:write` を追加してワークスペースにインストール → `SLACK_BOT_TOKEN`(`xoxb-`)。
+   - 「Socket Mode」を ON にして App-Level Token を発行(`connections:write` スコープ)→ `SLACK_APP_TOKEN`(`xapp-`)。
+   - Event Subscriptions で `app_mention` イベントを購読(Socket Mode なので Request URL の設定は不要)。
+   - `SLACK_ALLOWED_USER_ID` に自分の Slack ユーザー ID を設定しておくと、他のユーザーからのメンションを無視できる(推奨。個人のメール/カレンダーを操作できるため)。
+   - `go run ./cmd/api web api webui`(または prod 起動)で自動的にリスナーが起動する。トークン未設定時は何もせずスキップする。
 
 ## CI/CD(本リポジトリの責務)
 
@@ -93,10 +105,12 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 
 > yq の書き換え式は、API Deployment の container 名 `api` / CronWorkflow の template 名 `run-batch` を前提にしている。インフラリポ側の manifest 構造に合わせてワークフローの式を調整すること。
 >
-> インフラリポ側 manifest の env は `secretary-secrets`(GOOGLE_API_KEY / OAuth 一式 / MYSQL_DSN / LINE_* など)を `envFrom` で注入する想定。API は `ADK_LAUNCHER=prod`、batch は `command: ["/app/batch"]` で起動する。
+> インフラリポ側 manifest の env は `secretary-secrets`(GOOGLE_API_KEY / OAuth 一式 / MYSQL_DSN / SLACK_WEBHOOK_URL / SLACK_BOT_TOKEN / SLACK_APP_TOKEN / LINE_* など)を `envFrom` で注入する想定。API は `ADK_LAUNCHER=prod`、batch は `command: ["/app/batch"]` で起動する。
 
 ## 安全性メモ
 
 - Gmail スコープは `gmail.modify`(ラベル変更・trash は可能だが**完全削除は不可**)。
 - `ACTION_MODE=label_only` では削除は一切行わない。`auto_trash` を有効にして初めて `gmail_trash`(30日復元可のゴミ箱移動)が使える。
-- 旧 LINE Notify は 2025-03-31 終了のため、LINE Messaging API の push を使用。
+- 通知は Slack Incoming Webhook が既定。`SLACK_WEBHOOK_URL` 未設定時は通知処理をスキップする(エラーにはしない)。
+- 旧 LINE Notify は 2025-03-31 終了のため、LINE 通知は LINE Messaging API の push を使用(フォールバックとしてツールは残置、既定の指示では呼び出さない)。
+- Slack の `@メンション`はメールの分類・ラベル付与・カレンダー登録が可能な同一エージェントを呼び出す(`ACTION_MODE` によるゲーティングは変わらない)。ワークスペース内の誰でもメンションできてしまうため、`SLACK_ALLOWED_USER_ID` で本人以外からの呼び出しを拒否することを強く推奨する。

@@ -9,3 +9,9 @@ When adding or changing tools in `internal/tools/`:
 - Tools that delete or trash anything must not be registered at all outside `auto_trash` mode (`gmail_trash` is the existing example).
 - Never widen the Gmail OAuth scope beyond `gmail.modify`; permanent deletion must stay impossible.
 - New mutating tools should support idempotency where the API allows it (e.g. `calendar_create_event` takes `srcMessageId` to dedupe).
+
+## Additional trigger surfaces
+
+The same agent (with the same `ACTION_MODE`-gated tools) can now be invoked from `internal/slackbot` in addition to the ADK REST API and the cron batch. Any new trigger surface into the agent must not bypass or duplicate the gating above — gating stays in the tool layer regardless of who/what called the agent.
+
+Because Slack input reaches the mailbox/calendar-mutating tools directly, `internal/slackbot` restricts callers to `SLACK_ALLOWED_USER_ID` when set. Don't remove this check or make it default to "allow all"; anyone who can `@mention` the bot in a shared channel would otherwise be able to drive Gmail/Calendar writes under the owner's credentials.
