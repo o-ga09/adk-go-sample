@@ -7,6 +7,7 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 - 予定は Google カレンダーへ登録
 - 結果の要約を **Slack** に通知(LINE 通知基盤も残置。フォールバックとして利用可)
 - Slack で bot に **@メンション**すると、その場でエージェントを呼び出せる(Socket Mode)
+- Slack で `go.dev/blog/...` の URL を渡すと、その **Go blog 記事を要約・翻訳**して返信
 - 定期実行は **ArgoWorkflows CronWorkflow**、UI は **ADK REST API**(`POST /run`, `/run_sse`)で接続
 
 ## 構成
@@ -16,8 +17,8 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 | `cmd/api` | 常時起動の API/UI サーバ(k8s Deployment)。`ADK_LAUNCHER=prod` で headless。 |
 | `cmd/batch` | cron 用ワンショット。`runner.Run()` を1回実行して終了(Argo Job)。 |
 | `cmd/oauth` | 個人 Gmail の OAuth refresh token を取得するローカル用ヘルパ。 |
-| `internal/agents/gmail` | Gmail 整理 LLM エージェント定義。 |
-| `internal/tools/{gmail,calendar,notify}` | ADK function tools(Gmail / Calendar / Slack・LINE)。 |
+| `internal/agents/gmail` | 秘書 LLM エージェント定義(Gmail 整理 / Go blog 要約・翻訳)。 |
+| `internal/tools/{gmail,calendar,notify,goblog}` | ADK function tools(Gmail / Calendar / Slack・LINE / Go blog 取得)。 |
 | `internal/slackbot` | Slack Socket Mode リスナー(`@メンション`→エージェント実行→スレッド返信)。`cmd/api` 内で起動。 |
 | `internal/google` | OAuth から Gmail/Calendar クライアント生成。 |
 | `internal/store` | MySQL バックエンドの session.Service(未設定時は in-memory)。 |
@@ -80,6 +81,13 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
    - Event Subscriptions で `app_mention` イベントを購読(Socket Mode なので Request URL の設定は不要)。
    - `SLACK_ALLOWED_USER_ID` に自分の Slack ユーザー ID を設定しておくと、他のユーザーからのメンションを無視できる(推奨。個人のメール/カレンダーを操作できるため)。
    - `go run ./cmd/api web api webui`(または prod 起動)で自動的にリスナーが起動する。トークン未設定時は何もせずスキップする。
+7. **Go blog の要約・翻訳を試す**: Slack の bot に `@bot https://go.dev/blog/slices を要約して` のように話しかける。追加の環境変数は不要(読み取り専用ツール)。API 直叩きでも同様に呼び出せる:
+   ```sh
+   curl -N -XPOST localhost:8080/run_sse -H 'Content-Type: application/json' -d '{
+     "appName":"gmail_secretary","userId":"me","sessionId":"s2",
+     "newMessage":{"role":"user","parts":[{"text":"https://go.dev/blog/slices を要約して"}]}
+   }'
+   ```
 
 ## CI/CD(本リポジトリの責務)
 
@@ -114,3 +122,4 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 - 通知は Slack Incoming Webhook が既定。`SLACK_WEBHOOK_URL` 未設定時は通知処理をスキップする(エラーにはしない)。
 - 旧 LINE Notify は 2025-03-31 終了のため、LINE 通知は LINE Messaging API の push を使用(フォールバックとしてツールは残置、既定の指示では呼び出さない)。
 - Slack の `@メンション`はメールの分類・ラベル付与・カレンダー登録が可能な同一エージェントを呼び出す(`ACTION_MODE` によるゲーティングは変わらない)。ワークスペース内の誰でもメンションできてしまうため、`SLACK_ALLOWED_USER_ID` で本人以外からの呼び出しを拒否することを強く推奨する。
+- `goblog_fetch_post` は読み取り専用で、`https://go.dev/...` 以外のホストは拒否する(任意 URL を取得できる SSRF ツールにしないため)。要約・翻訳自体はこのツールではなく呼び出し元のエージェント(LLM)が行う。
