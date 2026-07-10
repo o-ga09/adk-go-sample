@@ -12,11 +12,15 @@
 
 | ワークロード | 種別 | 役割 | 起動コマンド |
 |---|---|---|---|
-| `secretary-api` | Deployment + Service | 常時起動の API/UI サーバ。ADK REST API (`POST /run`, `/run_sse`) を提供。 | `/app/api`（`ADK_LAUNCHER=prod`）|
+| `secretary-api` | Deployment + Service | 常時起動の API/UI サーバ。ADK REST API (`POST /run`, `/run_sse`) を提供。`SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` を設定すると同一プロセス内でSlack Socket Modeリスナー(`@メンション`でGmail整理・Go blog要約翻訳エージェントを呼び出し)もgoroutineとして起動。 | `/app/api`（`ADK_LAUNCHER=prod`）|
 | `secretary-gmail-batch` | Argo **CronWorkflow** | Gmail 整理バッチ。1回実行して終了。 | `/app/batch` |
 
 両方とも**同じイメージ**を使う（イメージに `api`/`batch`/`oauth` の3バイナリが同梱されている）。
 コンテナの listen ポートは **8080**。
+
+> Slack Socket Modeはアプリ側からSlackへの **outbound WebSocket接続のみ**で完結する。新規Deployment/Serviceやinbound ingress/公開エンドポイントは不要。おうちk8sのegressがデフォルト許可であれば追加設定不要だが、egressを制限している場合は `secretary-api` から Slack (443/wss) への outbound を許可すること。
+>
+> Go blog要約・翻訳ツール(`goblog_fetch_post`)も同じ `secretary-api` プロセス内で動く読み取り専用ツールで、新規env var・Secret・ワークロードは不要(`https://go.dev/...` への outbound HTTPS のみ使用。egress制限時は `go.dev` への許可も必要)。
 
 ---
 
@@ -165,7 +169,13 @@ spec:
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth クライアント |
 | `GOOGLE_OAUTH_REFRESH_TOKEN` | 個人 Gmail の refresh token（アプリ repo の `cmd/oauth` で取得） |
 | `MYSQL_DSN` | 例 `user:pass@tcp(mysql.secretary.svc:3306)/secretary?parseTime=true` |
-| `LINE_CHANNEL_TOKEN` / `LINE_TARGET_USER_ID` | LINE Messaging API |
+| `SLACK_WEBHOOK_URL` | Slack Incoming Webhook URL(バッチ結果通知の既定チャネル) |
+| `SLACK_BOT_TOKEN` | Slack Bot Token(`xoxb-...`)。未設定なら Slack `@メンション`リスナーは起動しない |
+| `SLACK_APP_TOKEN` | Slack App-Level Token(`xapp-...`)。Socket Mode接続用。未設定なら同上 |
+| `SLACK_ALLOWED_USER_ID` | この Slack ユーザーID以外の`@メンション`を拒否(**強く推奨**。Gmail/Calendar書き込み権限を持つエージェントを誰でも呼び出せてしまうため) |
+| `LINE_CHANNEL_TOKEN` / `LINE_TARGET_USER_ID` | LINE Messaging API(フォールバック通知) |
+
+> `SLACK_*` / `LINE_*` はいずれも未設定で構わない(該当機能がスキップされるだけでアプリ自体は起動する)。Go blog要約・翻訳ツールが使う env var は無い。
 
 **作成方法（このリポの方針に合わせて1つ選ぶ）:**
 - このクラスタに **SealedSecrets / ExternalSecrets** が入っているなら、それを使って暗号化した Secret をコミットする（推奨。平文をコミットしない）。
@@ -177,6 +187,10 @@ spec:
     --from-literal=GOOGLE_OAUTH_CLIENT_SECRET=... \
     --from-literal=GOOGLE_OAUTH_REFRESH_TOKEN=... \
     --from-literal=MYSQL_DSN='user:pass@tcp(mysql.secretary.svc:3306)/secretary?parseTime=true' \
+    --from-literal=SLACK_WEBHOOK_URL=... \
+    --from-literal=SLACK_BOT_TOKEN=... \
+    --from-literal=SLACK_APP_TOKEN=... \
+    --from-literal=SLACK_ALLOWED_USER_ID=... \
     --from-literal=LINE_CHANNEL_TOKEN=... \
     --from-literal=LINE_TARGET_USER_ID=...
   ```
@@ -239,9 +253,10 @@ spec:
 
 - [ ] `apps/secretary/` に namespace / api-deployment / cronworkflow を作成（image は実 GAR パス）
 - [ ] API Deployment の container 名が **`api`**、CronWorkflow の template 名が **`run-batch`**（CI 契約）
-- [ ] `secretary-secrets` を SealedSecrets/ExternalSecrets もしくは手動で用意（平文は未コミット）
+- [ ] `secretary-secrets` を SealedSecrets/ExternalSecrets もしくは手動で用意（平文は未コミット。Slackを使うなら `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN`/`SLACK_ALLOWED_USER_ID`/`SLACK_WEBHOOK_URL` も含める）
 - [ ] GAR pull 設定（imagePullSecrets もしくはノード権限）
 - [ ] Argo Workflows controller が `secretary` namespace を対象にしている
+- [ ] egressを制限しているクラスタなら `secretary-api` から Slack (`*.slack.com` 443/wss) と `go.dev` (443) への outbound を許可
 - [ ] （ArgoCD 運用なら）Application 追加
 - [ ] 動作確認: `kubectl -n secretary get deploy,svc`、`argo -n secretary submit --from cronwf/secretary-gmail-batch` で Job 成功
 - [ ] アプリ repo 側に §6 の Variables/Secrets が登録されていることを担当者に確認

@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A personal secretary agent built with ADK for Go (`google.golang.org/adk`) + Gemini. The first feature is a Gmail triage agent: it classifies incoming mail into "needs review / unwanted / has schedule", labels unwanted mail, registers events in Google Calendar, and sends a summary via Slack (the LINE notification tool from the original implementation is kept registered as a fallback but is not used by the default instruction prompt). README.md (Japanese) has the full env-var table and setup walkthrough.
+A personal secretary agent built with ADK for Go (`google.golang.org/adk`) + Gemini. The first feature is a Gmail triage agent: it classifies incoming mail into "needs review / unwanted / has schedule", labels unwanted mail, registers events in Google Calendar, and sends a summary via Slack (the LINE notification tool from the original implementation is kept registered as a fallback but is not used by the default instruction prompt). The same agent also fetches, summarizes, and translates Go blog (`go.dev/blog/...`) posts on request — typically invoked via the Slack `@mention` listener. README.md (Japanese) has the full env-var table and setup walkthrough.
 
 ## Commands
 
 ```sh
 go build ./...                       # build everything
-go vet ./...                        # lint (no other linter configured; no tests exist yet)
+go vet ./...                        # lint (no other linter configured)
+go test ./...                       # tests (currently just internal/tools/goblog's HTML-extraction logic)
 
 ACTION_MODE=dry_run go run ./cmd/batch   # one-shot agent run, no real changes
 go run ./cmd/api web api webui           # dev server with Web UI at :8080
@@ -31,7 +32,7 @@ Four entry points in `cmd/` share one dependency builder, `internal/app.Build()`
 - `cmd/migrate` — schema migration, run as an ArgoCD PreSync Job before pods roll out.
 - `cmd/oauth` — local-only refresh-token helper.
 
-The agent (`internal/agents/gmail`) is an `llmagent` whose behavior is driven entirely by its instruction prompt (in Japanese — user-facing output is Japanese) plus function tools from `internal/tools/{gmail,calendar,notify}`. Safety is enforced at the tool layer, not just in the prompt — see `.claude/rules/action-mode-safety.md`.
+The agent (`internal/agents/gmail`) is an `llmagent` whose behavior is driven entirely by its instruction prompt (in Japanese — user-facing output is Japanese) plus function tools from `internal/tools/{gmail,calendar,notify,goblog}`. The instruction routes between two tasks based on what the caller asked for: the Gmail triage flow, or (given a `go.dev/blog/...` URL) fetching, summarizing, and translating a Go blog post via `goblog_fetch_post` — the tool only returns raw title/text; the LLM does the summarizing/translating itself. Safety is enforced at the tool layer, not just in the prompt — see `.claude/rules/action-mode-safety.md`. `goblog_fetch_post` is read-only and hard-restricted to the `go.dev` host to avoid becoming an open URL fetcher.
 
 `internal/agents/llmauditor.go` and `image_generator.go` are standalone sample agents not wired into the app.
 
