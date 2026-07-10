@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A personal secretary agent built with ADK for Go (`google.golang.org/adk`) + Gemini. The first feature is a Gmail triage agent: it classifies incoming mail into "needs review / unwanted / has schedule", labels unwanted mail, registers events in Google Calendar, and sends a summary via LINE. README.md (Japanese) has the full env-var table and setup walkthrough.
+A personal secretary agent built with ADK for Go (`google.golang.org/adk`) + Gemini. The first feature is a Gmail triage agent: it classifies incoming mail into "needs review / unwanted / has schedule", labels unwanted mail, registers events in Google Calendar, and sends a summary via Slack (the LINE notification tool from the original implementation is kept registered as a fallback but is not used by the default instruction prompt). README.md (Japanese) has the full env-var table and setup walkthrough.
 
 ## Commands
 
@@ -18,7 +18,7 @@ go run ./cmd/oauth                       # one-time local helper to obtain a ref
 go run ./cmd/migrate -command up         # create/update MySQL session tables (needs MYSQL_DSN)
 ```
 
-Required env for the agent to actually run: `GOOGLE_API_KEY`, `GOOGLE_OAUTH_CLIENT_ID/_SECRET/_REFRESH_TOKEN` (see README). Without `MYSQL_DSN` sessions are in-memory, which is fine locally.
+Required env for the agent to actually run: `GOOGLE_API_KEY`, `GOOGLE_OAUTH_CLIENT_ID/_SECRET/_REFRESH_TOKEN` (see README). Without `MYSQL_DSN` sessions are in-memory, which is fine locally. If `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` are set, `cmd/api` also starts a Slack Socket Mode listener (`internal/slackbot`) so the agent can be invoked by `@mention`ing the bot; otherwise it's skipped silently.
 
 **ADK launcher gotcha**: the `web` launcher requires its sublaunchers listed explicitly as args (`api`, `a2a`, `webui`). Omitting them fails with `no active sublaunchers found`. Prod runs headless via `ADK_LAUNCHER=prod ./api web api a2a` (the Dockerfile bakes this in as ENTRYPOINT/CMD).
 
@@ -26,7 +26,7 @@ Required env for the agent to actually run: `GOOGLE_API_KEY`, `GOOGLE_OAUTH_CLIE
 
 Four entry points in `cmd/` share one dependency builder, `internal/app.Build()`, which assembles: Gemini model → Google OAuth clients (`internal/google`) → the gmail agent → session service. Anything wired into both the API server and the batch belongs there.
 
-- `cmd/api` — always-on ADK REST API server (`POST /run`, `/run_sse`) for a k8s Deployment.
+- `cmd/api` — always-on ADK REST API server (`POST /run`, `/run_sse`) for a k8s Deployment. Also owns the optional Slack Socket Mode listener (`internal/slackbot`), started as a goroutine alongside the ADK launcher — not wired into `internal/app.Build()` since only the API server needs it.
 - `cmd/batch` — one-shot `runner.Run()` invocation, triggered by an ArgoWorkflows CronWorkflow. Creates its own session (`cron-<timestamp>`) before running, because `runner.Run` requires an existing session.
 - `cmd/migrate` — schema migration, run as an ArgoCD PreSync Job before pods roll out.
 - `cmd/oauth` — local-only refresh-token helper.

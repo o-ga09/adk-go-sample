@@ -1,6 +1,8 @@
-// Package notifytools exposes a LINE push-notification tool. It uses the LINE
-// Messaging API push endpoint (the old LINE Notify service was shut down on
-// 2025-03-31).
+// Package notifytools exposes notification tools (Slack, LINE) used by the
+// gmail agent to deliver its summary. This file is the LINE push-notification
+// tool; it uses the LINE Messaging API push endpoint (the old LINE Notify
+// service was shut down on 2025-03-31). LINE is kept as a fallback channel
+// alongside Slack (see slack.go), which is the default.
 package notifytools
 
 import (
@@ -17,8 +19,8 @@ import (
 
 const pushURL = "https://api.line.me/v2/bot/message/push"
 
-// Tools returns the LINE notification tool.
-func Tools(c *config.Config) ([]tool.Tool, error) {
+// LineTools returns the LINE notification tool.
+func LineTools(c *config.Config) ([]tool.Tool, error) {
 	pushTool, err := functiontool.New(functiontool.Config{
 		Name:        "line_push",
 		Description: "Send a text notification to the user via LINE. Use this to deliver the final summary.",

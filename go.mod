@@ -4,6 +4,7 @@ go 1.25.8
 
 require (
 	github.com/go-sql-driver/mysql v1.8.1
+	github.com/slack-go/slack v0.27.0
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/adk v0.1.0
 	google.golang.org/api v0.285.0
