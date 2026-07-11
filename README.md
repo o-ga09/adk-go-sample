@@ -5,7 +5,7 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 - 受信メールを「要確認 / 不要 / 予定あり」に分類
 - 不要メールに Gmail ラベルを付与(※当面は**削除しない**)
 - 予定は Google カレンダーへ登録
-- 結果の要約を **Slack** に通知(LINE 通知基盤も残置。フォールバックとして利用可)
+- 結果の要約を **Slack Bot**(`chat.postMessage`)で通知
 - Slack で bot に **@メンション**すると、その場でエージェントを呼び出せる(Socket Mode)
 - Slack で `go.dev/blog/...` の URL を渡すと、その **Go blog 記事を要約・翻訳**して返信
 - 定期実行は **ArgoWorkflows CronWorkflow**、UI は **ADK REST API**(`POST /run`, `/run_sse`)で接続
@@ -18,7 +18,7 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 | `cmd/batch` | cron 用ワンショット。`runner.Run()` を1回実行して終了(Argo Job)。 |
 | `cmd/oauth` | 個人 Gmail の OAuth refresh token を取得するローカル用ヘルパ。 |
 | `internal/agents/gmail` | 秘書 LLM エージェント定義(Gmail 整理 / Go blog 要約・翻訳)。 |
-| `internal/tools/{gmail,calendar,notify,goblog}` | ADK function tools(Gmail / Calendar / Slack・LINE / Go blog 取得)。 |
+| `internal/tools/{gmail,calendar,notify,goblog}` | ADK function tools(Gmail / Calendar / Slack / Go blog 取得)。 |
 | `internal/slackbot` | Slack Socket Mode リスナー(`@メンション`→エージェント実行→スレッド返信)。`cmd/api` 内で起動。 |
 | `internal/google` | OAuth から Gmail/Calendar クライアント生成。 |
 | `internal/store` | MySQL バックエンドの session.Service(未設定時は in-memory)。 |
@@ -37,11 +37,10 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 | `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | OAuth クライアント | (必須) |
 | `GOOGLE_OAUTH_REFRESH_TOKEN` | `cmd/oauth` で取得 | (必須) |
 | `MYSQL_DSN` | 例 `user:pass@tcp(mysql:3306)/secretary?parseTime=true`。空なら in-memory | "" |
-| `SLACK_WEBHOOK_URL` | Slack Incoming Webhook URL(通知の既定チャネル) | "" |
-| `SLACK_BOT_TOKEN` | Slack Bot Token(`xoxb-...`)。返信の投稿に使用 | "" |
+| `SLACK_BOT_TOKEN` | Slack Bot Token(`xoxb-...`)。メンション返信と通知サマリ投稿(`chat.postMessage`)に使用 | "" |
+| `SLACK_CHANNEL_ID` | 通知サマリの投稿先チャンネル ID | "" (未設定なら通知スキップ) |
 | `SLACK_APP_TOKEN` | Slack App-Level Token(`xapp-...`)。Socket Mode 接続に使用 | "" |
 | `SLACK_ALLOWED_USER_ID` | この Slack ユーザー ID からのメンションのみ受け付ける | "" (無指定なら全員可) |
-| `LINE_CHANNEL_TOKEN` / `LINE_TARGET_USER_ID` | LINE Messaging API(フォールバック) | "" |
 | `GMAIL_QUERY` | 整理対象の Gmail 検索クエリ | `in:inbox is:unread newer_than:1d` |
 | `ACTION_MODE` | `dry_run` \| `label_only` \| `auto_trash` | `label_only` |
 | `APP_NAME` | ADK アプリ名(UI の appName) | `gmail_secretary` |
@@ -75,12 +74,13 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
      "newMessage":{"role":"user","parts":[{"text":"受信トレイを整理して通知して"}]}
    }'
    ```
-6. **Slack から呼び出す(任意)**: Slack App を作成し、Socket Mode を有効化。
+6. **Slack から呼び出す/通知を受け取る(任意)**: Slack App を作成し、Socket Mode を有効化。
    - Bot Token Scopes に `app_mentions:read` / `chat:write` を追加してワークスペースにインストール → `SLACK_BOT_TOKEN`(`xoxb-`)。
    - 「Socket Mode」を ON にして App-Level Token を発行(`connections:write` スコープ)→ `SLACK_APP_TOKEN`(`xapp-`)。
    - Event Subscriptions で `app_mention` イベントを購読(Socket Mode なので Request URL の設定は不要)。
    - `SLACK_ALLOWED_USER_ID` に自分の Slack ユーザー ID を設定しておくと、他のユーザーからのメンションを無視できる(推奨。個人のメール/カレンダーを操作できるため)。
-   - `go run ./cmd/api web api webui`(または prod 起動)で自動的にリスナーが起動する。トークン未設定時は何もせずスキップする。
+   - 通知サマリを投稿させたいチャンネルに Bot を **`/invite`** しておく(未招待だと `not_in_channel` エラーで投稿に失敗する)。チャンネル ID はチャンネル詳細(チャンネル名クリック)の下部からコピーできる → `SLACK_CHANNEL_ID`。
+   - `go run ./cmd/api web api webui`(または prod 起動)で自動的にリスナーが起動する。トークン未設定時は何もせずスキップする。`SLACK_BOT_TOKEN` / `SLACK_CHANNEL_ID` のいずれかが未設定の場合、通知サマリの投稿もスキップされる(エラーにはしない)。
 7. **Go blog の要約・翻訳を試す**: Slack の bot に `@bot https://go.dev/blog/slices を要約して` のように話しかける。追加の環境変数は不要(読み取り専用ツール)。API 直叩きでも同様に呼び出せる:
    ```sh
    curl -N -XPOST localhost:8080/run_sse -H 'Content-Type: application/json' -d '{
@@ -113,13 +113,14 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 
 > yq の書き換え式は、API Deployment の container 名 `api` / CronWorkflow の template 名 `run-batch` を前提にしている。インフラリポ側の manifest 構造に合わせてワークフローの式を調整すること。
 >
-> インフラリポ側 manifest の env は `secretary-secrets`(GOOGLE_API_KEY / OAuth 一式 / MYSQL_DSN / SLACK_WEBHOOK_URL / SLACK_BOT_TOKEN / SLACK_APP_TOKEN / LINE_* など)を `envFrom` で注入する想定。API は `ADK_LAUNCHER=prod`、batch は `command: ["/app/batch"]` で起動する。
+> インフラリポ側 manifest の env は `secretary-secrets`(GOOGLE_API_KEY / OAuth 一式 / MYSQL_DSN / SLACK_BOT_TOKEN / SLACK_CHANNEL_ID / SLACK_APP_TOKEN など)を `envFrom` で注入する想定。API は `ADK_LAUNCHER=prod`、batch は `command: ["/app/batch"]` で起動する。
+>
+> 既存デプロイからの移行時は、Secret に `SLACK_CHANNEL_ID` を追加し、`SLACK_WEBHOOK_URL` / `LINE_CHANNEL_TOKEN` / `LINE_TARGET_USER_ID` を削除すること。
 
 ## 安全性メモ
 
 - Gmail スコープは `gmail.modify`(ラベル変更・trash は可能だが**完全削除は不可**)。
 - `ACTION_MODE=label_only` では削除は一切行わない。`auto_trash` を有効にして初めて `gmail_trash`(30日復元可のゴミ箱移動)が使える。
-- 通知は Slack Incoming Webhook が既定。`SLACK_WEBHOOK_URL` 未設定時は通知処理をスキップする(エラーにはしない)。
-- 旧 LINE Notify は 2025-03-31 終了のため、LINE 通知は LINE Messaging API の push を使用(フォールバックとしてツールは残置、既定の指示では呼び出さない)。
+- 通知は Slack Bot(`chat.postMessage`)経由。`SLACK_BOT_TOKEN` / `SLACK_CHANNEL_ID` のいずれか未設定時は通知処理をスキップする(エラーにはしない)。cron バッチ / ADK REST API / Slack メンションのどの経路から実行しても、通知は同じ Bot Token 経由に統一される。
 - Slack の `@メンション`はメールの分類・ラベル付与・カレンダー登録が可能な同一エージェントを呼び出す(`ACTION_MODE` によるゲーティングは変わらない)。ワークスペース内の誰でもメンションできてしまうため、`SLACK_ALLOWED_USER_ID` で本人以外からの呼び出しを拒否することを強く推奨する。
 - `goblog_fetch_post` は読み取り専用で、`https://go.dev/...` 以外のホストは拒否する(任意 URL を取得できる SSRF ツールにしないため)。要約・翻訳自体はこのツールではなく呼び出し元のエージェント(LLM)が行う。
