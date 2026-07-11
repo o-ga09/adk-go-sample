@@ -61,10 +61,14 @@ type eventItem struct {
 	When     string `json:"when"`
 }
 
+// Every field is optional: the inferred JSON schema marks fields without
+// `omitempty` as required, and the ADK rejects the whole call if the LLM omits
+// one (e.g. no events registered that day). See
+// .claude/rules/tool-json-schema.md.
 type slackPushInput struct {
-	NeedsReview  []needsReviewItem `json:"needsReview"`
-	LabeledCount int               `json:"labeledCount"`
-	Events       []eventItem       `json:"events"`
+	NeedsReview  []needsReviewItem `json:"needsReview,omitempty"`
+	LabeledCount int               `json:"labeledCount,omitempty"`
+	Events       []eventItem       `json:"events,omitempty"`
 	Note         string            `json:"note,omitempty"`
 }
 
