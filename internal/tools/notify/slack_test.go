@@ -1,9 +1,12 @@
 package notifytools
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/google/jsonschema-go/jsonschema"
 )
 
 func TestFormatSummary(t *testing.T) {
@@ -199,6 +202,34 @@ func TestEscapeMrkdwn(t *testing.T) {
 				t.Errorf("escapeMrkdwn(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestSlackPushInputSchemaAllowsOmittedFields replays the validation the ADK's
+// functiontool runs on every call: fields without omitempty are required in
+// the inferred schema, so the LLM omitting needsReview/events on a quiet day
+// would fail the whole tool call.
+func TestSlackPushInputSchemaAllowsOmittedFields(t *testing.T) {
+	schema, err := jsonschema.For[slackPushInput](nil)
+	if err != nil {
+		t.Fatalf("infer schema: %v", err)
+	}
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		t.Fatalf("resolve schema: %v", err)
+	}
+	for _, payload := range []string{
+		`{}`,
+		`{"labeledCount":3}`,
+		`{"note":"メールの取得に失敗しました"}`,
+	} {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(payload), &m); err != nil {
+			t.Fatal(err)
+		}
+		if err := resolved.Validate(m); err != nil {
+			t.Errorf("payload %s rejected by inferred schema: %v", payload, err)
+		}
 	}
 }
 

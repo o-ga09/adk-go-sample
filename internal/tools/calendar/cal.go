@@ -27,13 +27,16 @@ func Tools(svc *calendar.Service, mode config.ActionMode) ([]tool.Tool, error) {
 	return []tool.Tool{createTool}, nil
 }
 
+// Optional fields need `omitempty`: the inferred JSON schema marks fields
+// without it as required, and the ADK rejects the whole call if the LLM omits
+// one. See .claude/rules/tool-json-schema.md.
 type createInput struct {
 	Summary      string `json:"summary"`
 	StartRFC3339 string `json:"startRFC3339"`
 	EndRFC3339   string `json:"endRFC3339"`
-	Description  string `json:"description"`
-	Location     string `json:"location"`
-	SrcMessageID string `json:"srcMessageId"`
+	Description  string `json:"description,omitempty"`
+	Location     string `json:"location,omitempty"`
+	SrcMessageID string `json:"srcMessageId,omitempty"`
 }
 
 type createResult struct {

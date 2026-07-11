@@ -70,9 +70,14 @@ func Tools(svc *gmail.Service, mode config.ActionMode) ([]tool.Tool, error) {
 
 // ---- list ----
 
+// NOTE: functiontool infers a JSON schema from these structs and validates
+// every call/result against it. A field without `omitempty` is *required* and
+// a nil slice serializes to null, which the schema rejects — either way the
+// whole tool call fails at the ADK layer. Optional fields must carry
+// `omitempty`. See .claude/rules/tool-json-schema.md.
 type listInput struct {
 	Query      string `json:"query"`
-	MaxResults int64  `json:"maxResults"`
+	MaxResults int64  `json:"maxResults,omitempty"`
 }
 
 type messageSummary struct {
@@ -84,7 +89,7 @@ type messageSummary struct {
 }
 
 type listResult struct {
-	Messages []messageSummary `json:"messages"`
+	Messages []messageSummary `json:"messages,omitempty"`
 	Status   string           `json:"status"`
 	Error    string           `json:"error,omitempty"`
 }
@@ -199,7 +204,7 @@ func ensureLabel(svc *gmail.Service, mode config.ActionMode) functiontool.Func[e
 type applyLabelInput struct {
 	MessageID       string `json:"messageId"`
 	LabelName       string `json:"labelName"`
-	RemoveFromInbox bool   `json:"removeFromInbox"`
+	RemoveFromInbox bool   `json:"removeFromInbox,omitempty"`
 }
 
 type applyLabelResult struct {

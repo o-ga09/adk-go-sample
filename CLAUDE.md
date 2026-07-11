@@ -41,5 +41,6 @@ The agent (`internal/agents/gmail`) is an `llmagent` whose behavior is driven en
 Situational invariants live in `.claude/rules/`:
 
 - `action-mode-safety.md` — ACTION_MODE gating; applies when adding or changing agent tools.
+- `tool-json-schema.md` — `omitempty`/nil-slice invariants for tool input/output structs; applies when adding or changing agent tools.
 - `mysql-sessions.md` — timestamp-precision invariants in `internal/store`; applies when touching the store or upgrading the ADK module.
 - `ci-cd-contract.md` — the cross-repo GitOps contract; applies when touching the workflow or Dockerfile.

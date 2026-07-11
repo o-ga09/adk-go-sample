@@ -90,9 +90,19 @@ func run() error {
 
 // compactJSON renders a tool's response map for the pod log so failures
 // surface with their real API error, truncated so a large mail body cannot
-// flood the log.
+// flood the log. When the ADK itself fails a tool call it puts a raw error
+// value in the map, which json.Marshal would render as {}; stringify those
+// first (on a copy — the map is the live event payload).
 func compactJSON(v map[string]any) string {
-	b, err := json.Marshal(v)
+	m := make(map[string]any, len(v))
+	for k, val := range v {
+		if e, ok := val.(error); ok {
+			m[k] = e.Error()
+		} else {
+			m[k] = val
+		}
+	}
+	b, err := json.Marshal(m)
 	if err != nil {
 		return fmt.Sprintf("%v", v)
 	}
