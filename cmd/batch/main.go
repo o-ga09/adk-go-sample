@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -75,6 +76,9 @@ func run() error {
 				if p.FunctionCall != nil {
 					log.Printf("[%s] tool-call: %s", ev.Author, p.FunctionCall.Name)
 				}
+				if p.FunctionResponse != nil {
+					log.Printf("[%s] tool-response: %s %s", ev.Author, p.FunctionResponse.Name, compactJSON(p.FunctionResponse.Response))
+				}
 			}
 		}
 	}
@@ -82,4 +86,19 @@ func run() error {
 	log.Printf("batch complete. final: %s", lastText)
 	_ = os.Stdout.Sync()
 	return nil
+}
+
+// compactJSON renders a tool's response map for the pod log so failures
+// surface with their real API error, truncated so a large mail body cannot
+// flood the log.
+func compactJSON(v map[string]any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	const max = 2000
+	if len(b) > max {
+		return string(b[:max]) + "...(truncated)"
+	}
+	return string(b)
 }

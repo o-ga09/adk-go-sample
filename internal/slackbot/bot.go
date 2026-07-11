@@ -8,6 +8,7 @@ package slackbot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
@@ -164,6 +165,12 @@ func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent
 				if p.Text != "" {
 					lastText = p.Text
 				}
+				if p.FunctionCall != nil {
+					log.Printf("slackbot: [%s] tool-call: %s", ev.Author, p.FunctionCall.Name)
+				}
+				if p.FunctionResponse != nil {
+					log.Printf("slackbot: [%s] tool-response: %s %s", ev.Author, p.FunctionResponse.Name, compactJSON(p.FunctionResponse.Response))
+				}
 			}
 		}
 	}
@@ -171,6 +178,21 @@ func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent
 		lastText = "(応答がありませんでした)"
 	}
 	return lastText, nil
+}
+
+// compactJSON renders a tool's response map for the pod log so failures
+// surface with their real API error, truncated so a large mail body cannot
+// flood the log.
+func compactJSON(v map[string]any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	const max = 2000
+	if len(b) > max {
+		return string(b[:max]) + "...(truncated)"
+	}
+	return string(b)
 }
 
 func (l *Listener) reply(ctx context.Context, mention *slackevents.AppMentionEvent, text string) {
