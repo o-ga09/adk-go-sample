@@ -23,6 +23,15 @@ const gmailMessageLinkPrefix = "https://mail.google.com/mail/u/0/#all/"
 // is ~40,000 characters for a single message).
 const maxMessageLen = 39000
 
+// Session-state keys under which internal/slackbot records where the
+// triggering Slack request came from. When present, the summary is posted as
+// a reply in that thread instead of top-level to SLACK_CHANNEL_ID, so the
+// whole exchange for one request stays in one thread.
+const (
+	StateKeySlackChannel  = "slack_channel"
+	StateKeySlackThreadTS = "slack_thread_ts"
+)
+
 // SlackTools returns the Slack notification tool.
 func SlackTools(c *config.Config) ([]tool.Tool, error) {
 	pushTool, err := functiontool.New(functiontool.Config{
@@ -67,16 +76,39 @@ type slackPushResult struct {
 func slackPush(c *config.Config) functiontool.Func[slackPushInput, slackPushResult] {
 	client := slack.New(c.SlackBotToken)
 	return func(ctx tool.Context, in slackPushInput) slackPushResult {
-		if c.SlackBotToken == "" || c.SlackChannelID == "" {
+		channel, threadTS := requestOrigin(ctx)
+		if channel == "" {
+			channel = c.SlackChannelID
+		}
+		if c.SlackBotToken == "" || channel == "" {
 			log.Print("slack notify skipped: not configured")
 			return slackPushResult{Status: "skipped", Error: "Slack not configured"}
 		}
-		text := formatSummary(in)
-		if _, _, err := client.PostMessageContext(ctx, c.SlackChannelID, slack.MsgOptionText(text, false)); err != nil {
+		opts := []slack.MsgOption{slack.MsgOptionText(formatSummary(in), false)}
+		if threadTS != "" {
+			opts = append(opts, slack.MsgOptionTS(threadTS))
+		}
+		if _, _, err := client.PostMessageContext(ctx, channel, opts...); err != nil {
 			return slackPushResult{Status: "error", Error: err.Error()}
 		}
 		return slackPushResult{Status: "sent"}
 	}
+}
+
+// requestOrigin reads the Slack channel/thread the current request came from
+// out of session state. Both values are empty for the batch and REST API
+// paths, which never set them.
+func requestOrigin(ctx tool.Context) (channel, threadTS string) {
+	return stateString(ctx, StateKeySlackChannel), stateString(ctx, StateKeySlackThreadTS)
+}
+
+func stateString(ctx tool.Context, key string) string {
+	v, err := ctx.State().Get(key)
+	if err != nil {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
 }
 
 // formatSummary renders in as the Japanese Slack mrkdwn summary message,

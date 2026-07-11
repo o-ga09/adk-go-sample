@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/o-ga09/adk-go-sample/internal/config"
+	notifytools "github.com/o-ga09/adk-go-sample/internal/tools/notify"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
@@ -148,6 +149,13 @@ func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent
 			AppName:   l.app.AppName,
 			UserID:    userID,
 			SessionID: sessionID,
+			// Record where this request came from so the notify tool posts
+			// the summary back into the same thread instead of top-level to
+			// SLACK_CHANNEL_ID.
+			State: map[string]any{
+				notifytools.StateKeySlackChannel:  mention.Channel,
+				notifytools.StateKeySlackThreadTS: threadKey,
+			},
 		}); err != nil {
 			return "", fmt.Errorf("create session: %w", err)
 		}
