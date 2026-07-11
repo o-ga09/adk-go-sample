@@ -169,13 +169,12 @@ spec:
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth クライアント |
 | `GOOGLE_OAUTH_REFRESH_TOKEN` | 個人 Gmail の refresh token（アプリ repo の `cmd/oauth` で取得） |
 | `MYSQL_DSN` | 例 `user:pass@tcp(mysql.secretary.svc:3306)/secretary?parseTime=true` |
-| `SLACK_WEBHOOK_URL` | Slack Incoming Webhook URL(バッチ結果通知の既定チャネル) |
-| `SLACK_BOT_TOKEN` | Slack Bot Token(`xoxb-...`)。未設定なら Slack `@メンション`リスナーは起動しない |
-| `SLACK_APP_TOKEN` | Slack App-Level Token(`xapp-...`)。Socket Mode接続用。未設定なら同上 |
+| `SLACK_BOT_TOKEN` | Slack Bot Token(`xoxb-...`)。メンション返信と通知サマリ投稿(`chat.postMessage`)に使用。未設定なら Slack `@メンション`リスナーは起動しない |
+| `SLACK_CHANNEL_ID` | 通知サマリの投稿先チャンネル ID(未設定なら通知はスキップされる) |
+| `SLACK_APP_TOKEN` | Slack App-Level Token(`xapp-...`)。`secretary-api` の Socket Mode 接続に使用。未設定なら`@メンション`リスナーは起動しない |
 | `SLACK_ALLOWED_USER_ID` | この Slack ユーザーID以外の`@メンション`を拒否(**強く推奨**。Gmail/Calendar書き込み権限を持つエージェントを誰でも呼び出せてしまうため) |
-| `LINE_CHANNEL_TOKEN` / `LINE_TARGET_USER_ID` | LINE Messaging API(フォールバック通知) |
 
-> `SLACK_*` / `LINE_*` はいずれも未設定で構わない(該当機能がスキップされるだけでアプリ自体は起動する)。Go blog要約・翻訳ツールが使う env var は無い。
+> `SLACK_*` はいずれも未設定で構わない(該当機能がスキップされるだけでアプリ自体は起動する)。旧 `SLACK_WEBHOOK_URL` / `LINE_*` は廃止済みのため、既存 Secret に残っていれば削除してよい。Go blog要約・翻訳ツールが使う env var は無い。
 
 **作成方法（このリポの方針に合わせて1つ選ぶ）:**
 - このクラスタに **SealedSecrets / ExternalSecrets** が入っているなら、それを使って暗号化した Secret をコミットする（推奨。平文をコミットしない）。
@@ -187,14 +186,14 @@ spec:
     --from-literal=GOOGLE_OAUTH_CLIENT_SECRET=... \
     --from-literal=GOOGLE_OAUTH_REFRESH_TOKEN=... \
     --from-literal=MYSQL_DSN='user:pass@tcp(mysql.secretary.svc:3306)/secretary?parseTime=true' \
-    --from-literal=SLACK_WEBHOOK_URL=... \
     --from-literal=SLACK_BOT_TOKEN=... \
+    --from-literal=SLACK_CHANNEL_ID=... \
     --from-literal=SLACK_APP_TOKEN=... \
-    --from-literal=SLACK_ALLOWED_USER_ID=... \
-    --from-literal=LINE_CHANNEL_TOKEN=... \
-    --from-literal=LINE_TARGET_USER_ID=...
+    --from-literal=SLACK_ALLOWED_USER_ID=...
   ```
 `secret.md` にはこの手順だけ書き、**実値は絶対に commit しない**こと。
+
+`secretary-api`(Deployment)と `secretary-gmail-batch`(CronWorkflow)はどちらも同じ `secretary-secrets` を `envFrom` で注入するため、`SLACK_BOT_TOKEN` / `SLACK_CHANNEL_ID` は batch 側にも供給される。cron バッチ実行時の通知(chat.postMessage)にはこの2つが必須(未設定なら通知はスキップされるだけでエラーにはならない)。
 
 ---
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A personal secretary agent built with ADK for Go (`google.golang.org/adk`) + Gemini. The first feature is a Gmail triage agent: it classifies incoming mail into "needs review / unwanted / has schedule", labels unwanted mail, registers events in Google Calendar, and sends a summary via Slack (the LINE notification tool from the original implementation is kept registered as a fallback but is not used by the default instruction prompt). The same agent also fetches, summarizes, and translates Go blog (`go.dev/blog/...`) posts on request — typically invoked via the Slack `@mention` listener. README.md (Japanese) has the full env-var table and setup walkthrough.
+A personal secretary agent built with ADK for Go (`google.golang.org/adk`) + Gemini. The first feature is a Gmail triage agent: it classifies incoming mail into "needs review / unwanted / has schedule", labels unwanted mail, registers events in Google Calendar, and sends a summary via a Slack Bot (`chat.postMessage`), with needs-review mail linked to Gmail and calendar registrations linked to the event. The same agent also fetches, summarizes, and translates Go blog (`go.dev/blog/...`) posts on request — typically invoked via the Slack `@mention` listener. README.md (Japanese) has the full env-var table and setup walkthrough.
 
 ## Commands
 
@@ -19,7 +19,7 @@ go run ./cmd/oauth                       # one-time local helper to obtain a ref
 go run ./cmd/migrate -command up         # create/update MySQL session tables (needs MYSQL_DSN)
 ```
 
-Required env for the agent to actually run: `GOOGLE_API_KEY`, `GOOGLE_OAUTH_CLIENT_ID/_SECRET/_REFRESH_TOKEN` (see README). Without `MYSQL_DSN` sessions are in-memory, which is fine locally. If `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` are set, `cmd/api` also starts a Slack Socket Mode listener (`internal/slackbot`) so the agent can be invoked by `@mention`ing the bot; otherwise it's skipped silently.
+Required env for the agent to actually run: `GOOGLE_API_KEY`, `GOOGLE_OAUTH_CLIENT_ID/_SECRET/_REFRESH_TOKEN` (see README). Without `MYSQL_DSN` sessions are in-memory, which is fine locally. If `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` are set, `cmd/api` also starts a Slack Socket Mode listener (`internal/slackbot`) so the agent can be invoked by `@mention`ing the bot; otherwise it's skipped silently. The notify tool posts the summary via the same `SLACK_BOT_TOKEN` to `SLACK_CHANNEL_ID`; if either is unset, notification is skipped (not an error).
 
 **ADK launcher gotcha**: the `web` launcher requires its sublaunchers listed explicitly as args (`api`, `a2a`, `webui`). Omitting them fails with `no active sublaunchers found`. Prod runs headless via `ADK_LAUNCHER=prod ./api web api a2a` (the Dockerfile bakes this in as ENTRYPOINT/CMD).
 

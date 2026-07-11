@@ -33,22 +33,15 @@ type Config struct {
 	// Persistence
 	MySQLDSN string
 
-	// Slack Incoming Webhook (primary notification channel)
-	SlackWebhookURL string
-
-	// Slack Socket Mode (lets the user invoke the agent from Slack via
-	// @mention). Both tokens must be set to enable the listener.
-	SlackBotToken string // xoxb-..., used to post replies
-	SlackAppToken string // xapp-..., used to open the Socket Mode connection
+	// Slack Bot Token (chat.postMessage) notification channel.
+	SlackBotToken  string // xoxb-..., used to post replies and notifications
+	SlackAppToken  string // xapp-..., used to open the Socket Mode connection
+	SlackChannelID string // channel the notification summary is posted to
 	// SlackAllowedUserID, if set, restricts who may trigger the agent via
 	// @mention to this single Slack user ID. This is a personal secretary
 	// agent with mailbox/calendar write access, so anyone else in a channel
 	// the bot is added to must not be able to drive it.
 	SlackAllowedUserID string
-
-	// LINE Messaging API (kept as a fallback notification channel)
-	LineChannelToken string
-	LineTargetUserID string
 
 	// Behaviour
 	GmailQuery string
@@ -67,12 +60,10 @@ func Load() *Config {
 		OAuthClientSecret:  os.Getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
 		OAuthRefreshToken:  os.Getenv("GOOGLE_OAUTH_REFRESH_TOKEN"),
 		MySQLDSN:           os.Getenv("MYSQL_DSN"),
-		SlackWebhookURL:    os.Getenv("SLACK_WEBHOOK_URL"),
 		SlackBotToken:      os.Getenv("SLACK_BOT_TOKEN"),
 		SlackAppToken:      os.Getenv("SLACK_APP_TOKEN"),
+		SlackChannelID:     os.Getenv("SLACK_CHANNEL_ID"),
 		SlackAllowedUserID: os.Getenv("SLACK_ALLOWED_USER_ID"),
-		LineChannelToken:   os.Getenv("LINE_CHANNEL_TOKEN"),
-		LineTargetUserID:   os.Getenv("LINE_TARGET_USER_ID"),
 		GmailQuery:         envOr("GMAIL_QUERY", "in:inbox is:unread newer_than:1d"),
 		ActionMode:         ActionMode(envOr("ACTION_MODE", string(ModeLabelOnly))),
 		AppName:            envOr("APP_NAME", "gmail_secretary"),
