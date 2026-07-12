@@ -407,3 +407,309 @@ func TestEscapeIsSlackfmtEscape(t *testing.T) {
 		t.Errorf("slackfmt.Escape(%q) = %q, want %q", "A&B <x>", got, want)
 	}
 }
+
+func TestGoblogSummaryBlocks(t *testing.T) {
+	tests := []struct {
+		name string
+		in   goblogSummaryPushInput
+		want []string
+	}{
+		{
+			name: "タイトル・URL・要約・翻訳がすべてある",
+			in: goblogSummaryPushInput{
+				Title:       "range over func iterators",
+				URL:         "https://go.dev/blog/range-functions",
+				Summary:     "イテレータの要約です。",
+				Translation: "本文の全文訳です。",
+			},
+			want: []string{
+				"HEADER: range over func iterators",
+				"CONTEXT: https://go.dev/blog/range-functions",
+				"DIVIDER",
+				"SECTION: *要約*\nイテレータの要約です。",
+				"SECTION: *翻訳*\n本文の全文訳です。",
+			},
+		},
+		{
+			name: "noteがあるとContext blockで付記される",
+			in: goblogSummaryPushInput{
+				Title:   "タイトル",
+				Summary: "要約 & <確認>",
+				Note:    "補足 & <確認>",
+			},
+			want: []string{
+				"HEADER: タイトル",
+				"DIVIDER",
+				"SECTION: *要約*\n要約 &amp; &lt;確認&gt;",
+				"CONTEXT: 補足 &amp; &lt;確認&gt;",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := blockLines(t, goblogSummaryBlocks(tt.in))
+			if len(got) != len(tt.want) {
+				t.Fatalf("goblogSummaryBlocks() = %d blocks, want %d\ngot:  %#v\nwant: %#v", len(got), len(tt.want), got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("block[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestGoblogListBlocks(t *testing.T) {
+	tests := []struct {
+		name string
+		in   goblogListPushInput
+		want []string
+	}{
+		{
+			name: "記事一覧の公開日が分単位に整形される",
+			in: goblogListPushInput{
+				Posts: []goblogPostItem{
+					{Title: "Introducing the pkg.go.dev API", URL: "https://go.dev/blog/pkgsite-api", PublishedAt: "2026-05-21T00:00:00+00:00"},
+					{Title: "Type Construction and Cycle Detection", URL: "https://go.dev/blog/type-construction-and-cycle-detection", PublishedAt: "2026-03-24T09:15:30+09:00"},
+				},
+			},
+			want: []string{
+				"HEADER: :newspaper: 最近のGo Blog記事",
+				"SECTION: ・<https://go.dev/blog/pkgsite-api|Introducing the pkg.go.dev API> (2026-05-21 00:00)\n" +
+					"・<https://go.dev/blog/type-construction-and-cycle-detection|Type Construction and Cycle Detection> (2026-03-24 09:15)",
+			},
+		},
+		{
+			name: "0件は専用のヘッダーになる",
+			in:   goblogListPushInput{},
+			want: []string{"HEADER: :newspaper: 最近のGo Blog記事はありません"},
+		},
+		{
+			name: "publishedAtが空でも壊れない",
+			in: goblogListPushInput{
+				Posts: []goblogPostItem{{Title: "タイトル", URL: "https://go.dev/blog/x"}},
+			},
+			want: []string{
+				"HEADER: :newspaper: 最近のGo Blog記事",
+				"SECTION: ・<https://go.dev/blog/x|タイトル>",
+			},
+		},
+		{
+			name: "highlightがあると要約セクションが追加される",
+			in: goblogListPushInput{
+				Posts:            []goblogPostItem{{Title: "タイトル", URL: "https://go.dev/blog/x", PublishedAt: "2026-05-21T00:00:00+00:00"}},
+				HighlightTitle:   "タイトル",
+				HighlightSummary: "要約本文",
+			},
+			want: []string{
+				"HEADER: :newspaper: 最近のGo Blog記事",
+				"SECTION: ・<https://go.dev/blog/x|タイトル> (2026-05-21 00:00)",
+				"DIVIDER",
+				"SECTION: *タイトルの要約*\n要約本文",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := blockLines(t, goblogListBlocks(tt.in))
+			if len(got) != len(tt.want) {
+				t.Fatalf("goblogListBlocks() = %d blocks, want %d\ngot:  %#v\nwant: %#v", len(got), len(tt.want), got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("block[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestTaskListBlocks(t *testing.T) {
+	tests := []struct {
+		name string
+		in   taskListPushInput
+		want []string
+	}{
+		{
+			name: "期限が分単位に整形されメタ情報が付く",
+			in: taskListPushInput{
+				Heading: "次にやるべきタスク",
+				Tasks: []taskPushItem{
+					{ID: "T1", Title: "資料作成", Status: "next", Context: "@pc", Due: "2026-07-20T09:00:00+09:00", Project: "案件A"},
+				},
+			},
+			want: []string{
+				"HEADER: :clipboard: 次にやるべきタスク",
+				"SECTION: ・*資料作成* (next / @pc / 期限:2026-07-20 09:00 / project:案件A)",
+			},
+		},
+		{
+			name: "タスク0件は専用のヘッダーになる",
+			in:   taskListPushInput{Heading: "タスク一覧"},
+			want: []string{"HEADER: :clipboard: タスク一覧はありません"},
+		},
+		{
+			name: "メタ情報が何もなくても壊れない",
+			in: taskListPushInput{
+				Heading: "タスク一覧",
+				Tasks:   []taskPushItem{{ID: "T1", Title: "資料作成", Status: "inbox"}},
+			},
+			want: []string{
+				"HEADER: :clipboard: タスク一覧",
+				"SECTION: ・*資料作成* (inbox)",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := blockLines(t, taskListBlocks(tt.in))
+			if len(got) != len(tt.want) {
+				t.Fatalf("taskListBlocks() = %d blocks, want %d\ngot:  %#v\nwant: %#v", len(got), len(tt.want), got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("block[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestTaskActionBlocks(t *testing.T) {
+	tests := []struct {
+		name string
+		in   taskActionPushInput
+		want []string
+	}{
+		{
+			name: "登録成功",
+			in:   taskActionPushInput{Action: "add", Result: "created", Title: "資料作成"},
+			want: []string{
+				"HEADER: :inbox_tray: タスクを登録しました",
+				"SECTION: *資料作成*",
+			},
+		},
+		{
+			name: "更新成功で期限が分単位に整形される",
+			in: taskActionPushInput{
+				Action: "update", Result: "updated", Title: "資料作成",
+				TaskStatus: "next", Due: "2026-07-20T09:00:00+09:00",
+			},
+			want: []string{
+				"HEADER: :pencil2: タスクを更新しました",
+				"SECTION: *資料作成* (next / 期限:2026-07-20 09:00)",
+			},
+		},
+		{
+			name: "エラー時はnoteがContext blockになる",
+			in:   taskActionPushInput{Action: "complete", Result: "error", Note: "対象が見つかりません"},
+			want: []string{
+				"HEADER: :warning: タスク操作に失敗しました",
+				"CONTEXT: 対象が見つかりません",
+			},
+		},
+		{
+			name: "titleが空ならタスク詳細セクションは出ない",
+			in:   taskActionPushInput{Action: "add", Result: "dry_run_would_add"},
+			want: []string{"HEADER: :test_tube: (dry_run) タスクを登録します"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := blockLines(t, taskActionBlocks(tt.in))
+			if len(got) != len(tt.want) {
+				t.Fatalf("taskActionBlocks() = %d blocks, want %d\ngot:  %#v\nwant: %#v", len(got), len(tt.want), got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("block[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestNewPushToolInputSchemasAllowOmittedFields replays the validation the
+// ADK's functiontool runs on every call for the four push tools added
+// alongside slack_push/calendar_digest_push: fields without omitempty are
+// required in the inferred schema, so the LLM omitting an optional one (e.g.
+// posts on an empty feed, or note when there's nothing to add) would fail the
+// whole tool call. See .claude/rules/tool-json-schema.md.
+func TestNewPushToolInputSchemasAllowOmittedFields(t *testing.T) {
+	validate := func(t *testing.T, schema *jsonschema.Schema, payloads []string) {
+		t.Helper()
+		resolved, err := schema.Resolve(nil)
+		if err != nil {
+			t.Fatalf("resolve schema: %v", err)
+		}
+		for _, payload := range payloads {
+			var m map[string]any
+			if err := json.Unmarshal([]byte(payload), &m); err != nil {
+				t.Fatal(err)
+			}
+			if err := resolved.Validate(m); err != nil {
+				t.Errorf("payload %s rejected by inferred schema: %v", payload, err)
+			}
+		}
+	}
+
+	t.Run("goblog_summary_push", func(t *testing.T) {
+		schema, err := jsonschema.For[goblogSummaryPushInput](nil)
+		if err != nil {
+			t.Fatalf("infer schema: %v", err)
+		}
+		validate(t, schema, []string{
+			`{"title":"t","url":"https://go.dev/blog/x","summary":"s","translation":"tr"}`,
+		})
+	})
+
+	t.Run("goblog_list_push", func(t *testing.T) {
+		schema, err := jsonschema.For[goblogListPushInput](nil)
+		if err != nil {
+			t.Fatalf("infer schema: %v", err)
+		}
+		validate(t, schema, []string{`{}`, `{"note":"取得に失敗しました"}`})
+	})
+
+	t.Run("task_list_push", func(t *testing.T) {
+		schema, err := jsonschema.For[taskListPushInput](nil)
+		if err != nil {
+			t.Fatalf("infer schema: %v", err)
+		}
+		validate(t, schema, []string{`{"heading":"タスク一覧"}`})
+	})
+
+	t.Run("task_action_push", func(t *testing.T) {
+		schema, err := jsonschema.For[taskActionPushInput](nil)
+		if err != nil {
+			t.Fatalf("infer schema: %v", err)
+		}
+		validate(t, schema, []string{`{"action":"add","result":"created"}`})
+	})
+}
+
+func TestTaskActionHeading(t *testing.T) {
+	tests := []struct {
+		name           string
+		action, result string
+		want           string
+	}{
+		{name: "add/created", action: "add", result: "created", want: ":inbox_tray: タスクを登録しました"},
+		{name: "add/already_exists", action: "add", result: "already_exists", want: ":inbox_tray: タスクは既に登録済みです"},
+		{name: "add/dry_run", action: "add", result: "dry_run_would_add", want: ":test_tube: (dry_run) タスクを登録します"},
+		{name: "update/updated", action: "update", result: "updated", want: ":pencil2: タスクを更新しました"},
+		{name: "update/dry_run", action: "update", result: "dry_run_would_update", want: ":test_tube: (dry_run) タスクを更新します"},
+		{name: "complete/done", action: "complete", result: "done", want: ":white_check_mark: タスクを完了しました"},
+		{name: "complete/dry_run", action: "complete", result: "dry_run_would_complete", want: ":test_tube: (dry_run) タスクを完了します"},
+		{name: "任意のactionでerrorは共通の警告見出し", action: "add", result: "error", want: ":warning: タスク操作に失敗しました"},
+		{name: "未知の組み合わせはフォールバック", action: "unknown", result: "unknown", want: ":clipboard: タスクを更新しました"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := taskActionHeading(tt.action, tt.result); got != tt.want {
+				t.Errorf("taskActionHeading(%q, %q) = %q, want %q", tt.action, tt.result, got, tt.want)
+			}
+		})
+	}
+}

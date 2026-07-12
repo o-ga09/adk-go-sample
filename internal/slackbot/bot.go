@@ -19,7 +19,6 @@ import (
 	"github.com/o-ga09/adk-go-sample/internal/config"
 	"github.com/o-ga09/adk-go-sample/internal/llmusage"
 	"github.com/o-ga09/adk-go-sample/internal/slackfmt"
-	goblogtools "github.com/o-ga09/adk-go-sample/internal/tools/goblog"
 	notifytools "github.com/o-ga09/adk-go-sample/internal/tools/notify"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -321,7 +320,6 @@ func (l *Listener) ask(ctx context.Context, msg incomingMessage, text string) ([
 
 	var lastText string
 	var summaryPosted bool
-	var fetchedTitle, fetchedURL string
 	for ev, err := range l.run.Run(ctx, userID, sessionID, content, agent.RunConfig{}) {
 		if err != nil {
 			return nil, fmt.Errorf("agent run: %w", err)
@@ -333,11 +331,6 @@ func (l *Listener) ask(ctx context.Context, msg incomingMessage, text string) ([
 				}
 				if p.FunctionCall != nil {
 					log.Printf("slackbot: [%s] tool-call: %s", ev.Author, p.FunctionCall.Name)
-					if p.FunctionCall.Name == goblogtools.ToolNameFetchPost {
-						if u, _ := p.FunctionCall.Args["url"].(string); u != "" {
-							fetchedURL = u
-						}
-					}
 				}
 				if p.FunctionResponse != nil {
 					log.Printf("slackbot: [%s] tool-response: %s %s", ev.Author, p.FunctionResponse.Name, compactJSON(p.FunctionResponse.Response))
@@ -346,59 +339,36 @@ func (l *Listener) ask(ctx context.Context, msg incomingMessage, text string) ([
 							summaryPosted = true
 						}
 					}
-					if p.FunctionResponse.Name == goblogtools.ToolNameFetchPost {
-						if s, _ := p.FunctionResponse.Response["status"].(string); s == goblogtools.StatusSuccess {
-							if t, _ := p.FunctionResponse.Response["title"].(string); t != "" {
-								fetchedTitle = t
-							}
-						}
-					}
 				}
 			}
 		}
 	}
 	if lastText == "" {
-		// For the mail-triage and calendar-digest tasks the agent delivers its
-		// reply itself via a delivery tool (see isDeliveryTool, into this same
-		// thread) and may end its turn without any final text; replying
-		// "(応答がありませんでした)" on top of that reads like a failure. Only
-		// fall back when nothing was delivered.
+		// Most tasks (mail triage, calendar digest, goblog summary/list, GTD
+		// task actions/lists) deliver their reply themselves via a delivery
+		// tool (see isDeliveryTool, into this same thread) and may end their
+		// turn without any final text; replying "(応答がありませんでした)" on
+		// top of that reads like a failure. Only fall back when nothing was
+		// delivered.
 		if summaryPosted {
 			return nil, nil
 		}
 		lastText = "(応答がありませんでした)"
 	}
-	return replyBlocks(fetchedTitle, fetchedURL, lastText), nil
-}
-
-// replyBlocks builds the Slack Block Kit blocks for a reply. When title is
-// non-empty (a goblog_fetch_post article was fetched during this turn), the
-// message leads with a header and, if url is also known, a context block
-// linking to the source article, then a divider, so the summary/translation
-// body in text is visually separated from that metadata. Otherwise text
-// (a conversational reply or error message) is rendered as plain section
-// block(s) with no header.
-func replyBlocks(title, url, text string) []slack.Block {
-	if title == "" {
-		return slackfmt.Sections(text)
-	}
-	blocks := []slack.Block{slackfmt.Header(title)}
-	if url != "" {
-		blocks = append(blocks, slackfmt.Context(url))
-	}
-	blocks = append(blocks, slackfmt.Divider())
-	blocks = append(blocks, slackfmt.Sections(text)...)
-	return slackfmt.Limit(blocks)
+	return slackfmt.Sections(lastText), nil
 }
 
 // deliveryToolNames are the notify tools that post directly into the
-// requesting Slack thread/channel themselves (slack_push for mail triage,
-// calendar_digest_push for #14's calendar query/digest), as opposed to
-// answering via the agent's final response text. ask() must not follow one of
-// these with a "(応答がありませんでした)" fallback reply.
+// requesting Slack thread/channel themselves, as opposed to answering via
+// the agent's final response text. ask() must not follow one of these with a
+// "(応答がありませんでした)" fallback reply.
 var deliveryToolNames = map[string]bool{
 	notifytools.ToolNameSlackPush:          true,
 	notifytools.ToolNameCalendarDigestPush: true,
+	notifytools.ToolNameGoblogSummaryPush:  true,
+	notifytools.ToolNameGoblogListPush:     true,
+	notifytools.ToolNameTaskListPush:       true,
+	notifytools.ToolNameTaskActionPush:     true,
 }
 
 // isDeliveryTool reports whether name is one of deliveryToolNames.
