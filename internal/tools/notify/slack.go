@@ -23,6 +23,15 @@ const gmailMessageLinkPrefix = "https://mail.google.com/mail/u/0/#all/"
 // is ~40,000 characters for a single message).
 const maxMessageLen = 39000
 
+// ToolNameSlackPush is the registered name of the notification tool, and
+// StatusSlackPushSent is its result status for a delivered message.
+// internal/slackbot watches tool responses for this name/status pair to know
+// whether the summary was already delivered into the requesting thread.
+const (
+	ToolNameSlackPush   = "slack_push"
+	StatusSlackPushSent = "sent"
+)
+
 // Session-state keys under which internal/slackbot records where the
 // triggering Slack request came from. When present, the summary is posted as
 // a reply in that thread instead of top-level to SLACK_CHANNEL_ID, so the
@@ -35,7 +44,7 @@ const (
 // SlackTools returns the Slack notification tool.
 func SlackTools(c *config.Config) ([]tool.Tool, error) {
 	pushTool, err := functiontool.New(functiontool.Config{
-		Name: "slack_push",
+		Name: ToolNameSlackPush,
 		Description: "受信メール整理の結果をSlackへ通知する。要確認メールの一覧(件名とメッセージID)、" +
 			"不要としてラベル付与した件数、カレンダーに登録した予定の一覧(タイトル・イベントのhtmlLink・表示用日時)を" +
 			"渡すと、このツールが日本語のサマリメッセージを整形してSlackチャンネルに投稿する。" +
@@ -95,7 +104,7 @@ func slackPush(c *config.Config) functiontool.Func[slackPushInput, slackPushResu
 		if _, _, err := client.PostMessageContext(ctx, channel, opts...); err != nil {
 			return slackPushResult{Status: "error", Error: err.Error()}
 		}
-		return slackPushResult{Status: "sent"}
+		return slackPushResult{Status: StatusSlackPushSent}
 	}
 }
 
