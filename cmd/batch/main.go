@@ -143,14 +143,15 @@ func runLLMCostReport() error {
 		return fmt.Errorf("build daily report: %w", err)
 	}
 
-	text := llmusage.FormatSlackMessage(report)
-	log.Print(text)
+	blocks := llmusage.FormatSlackMessage(report)
+	log.Printf("llm cost report: date=%s cost=$%.4f requests=%d tokens=%d exceeded=%v",
+		report.Date, report.TotalCostUSD(), report.TotalRequests(), report.TotalTokens(), report.Exceeded())
 
 	if c.SlackBotToken == "" || c.SlackChannelID == "" {
 		log.Print("llm cost report: Slack not configured, skipping post")
 		return nil
 	}
-	if err := llmusage.PostToSlack(ctx, c.SlackBotToken, c.SlackChannelID, text); err != nil {
+	if err := llmusage.PostToSlack(ctx, c.SlackBotToken, c.SlackChannelID, blocks, report.Exceeded()); err != nil {
 		return fmt.Errorf("post to slack: %w", err)
 	}
 	return nil

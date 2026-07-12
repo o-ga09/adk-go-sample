@@ -6,7 +6,45 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/slack-go/slack"
 )
+
+// blockText concatenates every textual node across blocks, in order, for
+// substring-style assertions against the message content without depending
+// on slack-go's internal JSON layout.
+func blockText(t *testing.T, blocks []slack.Block) string {
+	t.Helper()
+	var b strings.Builder
+	for _, blk := range blocks {
+		switch bl := blk.(type) {
+		case *slack.HeaderBlock:
+			b.WriteString(bl.Text.Text)
+			b.WriteString("\n")
+		case *slack.SectionBlock:
+			if bl.Text != nil {
+				b.WriteString(bl.Text.Text)
+				b.WriteString("\n")
+			}
+			for _, f := range bl.Fields {
+				b.WriteString(f.Text)
+				b.WriteString("\n")
+			}
+		case *slack.ContextBlock:
+			for _, e := range bl.ContextElements.Elements {
+				if tb, ok := e.(*slack.TextBlockObject); ok {
+					b.WriteString(tb.Text)
+					b.WriteString("\n")
+				}
+			}
+		case *slack.DividerBlock:
+			// no text
+		default:
+			t.Fatalf("unexpected block type %T", blk)
+		}
+	}
+	return b.String()
+}
 
 func TestDailyReport_Totals(t *testing.T) {
 	r := DailyReport{
@@ -42,7 +80,7 @@ func TestFormatSlackMessage(t *testing.T) {
 				},
 				AlertThresholdUSD: 10,
 			},
-			wantSubstr: []string{"2026-07-11", "推定コスト合計: $0.0100", "リクエスト数: 1件", "batch: 1件"},
+			wantSubstr: []string{"2026-07-11", "推定コスト合計*\n$0.0100", "リクエスト数*\n1件", "batch: 1件"},
 			wantNot:    []string{":warning:"},
 		},
 		{
@@ -73,13 +111,17 @@ func TestFormatSlackMessage(t *testing.T) {
 				Date:      "2026-07-11",
 				ByTrigger: map[Trigger]Aggregate{},
 			},
-			wantSubstr: []string{"推定コスト合計: $0.0000", "リクエスト数: 0件"},
+			wantSubstr: []string{"推定コスト合計*\n$0.0000", "リクエスト数*\n0件"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := FormatSlackMessage(tt.report)
+			blocks := FormatSlackMessage(tt.report)
+			if len(blocks) > 50 {
+				t.Fatalf("FormatSlackMessage() = %d blocks, want <= 50", len(blocks))
+			}
+			got := blockText(t, blocks)
 			for _, s := range tt.wantSubstr {
 				if !strings.Contains(got, s) {
 					t.Errorf("message missing %q\ngot:\n%s", s, got)
@@ -89,6 +131,46 @@ func TestFormatSlackMessage(t *testing.T) {
 				if strings.Contains(got, s) {
 					t.Errorf("message unexpectedly contains %q\ngot:\n%s", s, got)
 				}
+			}
+		})
+	}
+}
+
+func TestDailyReport_Exceeded(t *testing.T) {
+	tests := []struct {
+		name string
+		r    DailyReport
+		want bool
+	}{
+		{
+			name: "しきい値以上は超過",
+			r: DailyReport{
+				ByTrigger:         map[Trigger]Aggregate{TriggerBatch: {EstimatedCostUSD: 15}},
+				AlertThresholdUSD: 10,
+			},
+			want: true,
+		},
+		{
+			name: "しきい値未満は未超過",
+			r: DailyReport{
+				ByTrigger:         map[Trigger]Aggregate{TriggerBatch: {EstimatedCostUSD: 5}},
+				AlertThresholdUSD: 10,
+			},
+			want: false,
+		},
+		{
+			name: "しきい値0は常に未超過",
+			r: DailyReport{
+				ByTrigger:         map[Trigger]Aggregate{TriggerBatch: {EstimatedCostUSD: 999}},
+				AlertThresholdUSD: 0,
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.r.Exceeded(); got != tt.want {
+				t.Errorf("Exceeded() = %v, want %v", got, tt.want)
 			}
 		})
 	}
