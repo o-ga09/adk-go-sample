@@ -86,9 +86,9 @@ func (r *UsageRecorder) DailyByTrigger(ctx context.Context, from, to time.Time) 
 		CostUSD     float64
 	}
 	err := r.db.WithContext(ctx).Model(&llmUsageSchema{}).
-		Select("trigger, COUNT(*) AS requests, COALESCE(SUM(total_tokens),0) AS total_tokens, COALESCE(SUM(estimated_cost_usd),0) AS cost_usd").
+		Select("`trigger`, COUNT(*) AS requests, COALESCE(SUM(total_tokens),0) AS total_tokens, COALESCE(SUM(estimated_cost_usd),0) AS cost_usd").
 		Where("timestamp >= ? AND timestamp < ?", from, to).
-		Group("trigger").
+		Group("`trigger`").
 		Scan(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("aggregate llm_usages by trigger: %w", err)
