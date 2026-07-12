@@ -15,6 +15,7 @@ golangci-lint run                   # additional lint (config: .golangci.yml); C
 go test ./...                       # tests (currently just internal/tools/goblog's HTML-extraction logic)
 
 ACTION_MODE=dry_run go run ./cmd/batch                    # one-shot agent run, no real changes (mail triage, the default -command)
+go run ./cmd/batch -command calendar-digest               # post today's calendar events to Slack (#14)
 go run ./cmd/batch -command llm-cost-report               # post yesterday's LLM cost summary to Slack (needs MYSQL_DSN; no-op otherwise)
 go run ./cmd/batch -command weekly-review                 # post the GTD weekly-review summary to Slack (needs MYSQL_DSN; no-op otherwise)
 go run ./cmd/api web api webui                            # dev server with Web UI at :8080
@@ -31,7 +32,7 @@ Required env for the agent to actually run: `GOOGLE_API_KEY`, `GOOGLE_OAUTH_CLIE
 Four entry points in `cmd/` share one dependency builder, `internal/app.Build()`, which assembles: Gemini model → Google OAuth clients (`internal/google`) → the gmail agent → session service. Anything wired into both the API server and the batch belongs there.
 
 - `cmd/api` — always-on ADK REST API server (`POST /run`, `/run_sse`) for a k8s Deployment. Also owns the optional Slack Socket Mode listener (`internal/slackbot`), started as a goroutine alongside the ADK launcher — not wired into `internal/app.Build()` since only the API server needs it.
-- `cmd/batch` — `-command mail` (default): one-shot `runner.Run()` invocation, triggered by an ArgoWorkflows CronWorkflow. Creates its own session (`cron-<timestamp>`) before running, because `runner.Run` requires an existing session. `-command llm-cost-report`: aggregates the previous day's LLM usage and posts a cost summary to Slack; does not call `internal/app.Build()` since it never touches Gmail/Calendar/Gemini. `-command weekly-review`: aggregates the current GTD task state (`internal/store.TaskStore`) via `internal/weeklyreview` and posts a summary to Slack; same no-`app.Build()`/no-op-without-`MYSQL_DSN` shape as `llm-cost-report`.
+- `cmd/batch` — `-command mail` (default) and `-command calendar-digest` (#14) both go through the same `runAgentPrompt()` helper: one-shot `runner.Run()` invocation with a fixed prompt, triggered by an ArgoWorkflows CronWorkflow. Creates its own session (`cron-<timestamp>`) before running, because `runner.Run` requires an existing session. `-command llm-cost-report`: aggregates the previous day's LLM usage and posts a cost summary to Slack; does not call `internal/app.Build()` since it never touches Gmail/Calendar/Gemini. `-command weekly-review`: aggregates the current GTD task state (`internal/store.TaskStore`) via `internal/weeklyreview` and posts a summary to Slack; same no-`app.Build()`/no-op-without-`MYSQL_DSN` shape as `llm-cost-report`.
 - `cmd/migrate` — schema migration, run as an ArgoCD PreSync Job before pods roll out.
 - `cmd/oauth` — local-only refresh-token helper.
 

@@ -4,6 +4,8 @@
 package calendartools
 
 import (
+	"time"
+
 	"github.com/o-ga09/adk-go-sample/internal/config"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
@@ -24,7 +26,21 @@ func Tools(svc *calendar.Service, mode config.ActionMode) ([]tool.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []tool.Tool{createTool}, nil
+
+	// Read-only, so it is registered regardless of ACTION_MODE: gating in
+	// .claude/rules/action-mode-safety.md concerns mutating capability, and
+	// listing events cannot mutate anything.
+	listTool, err := functiontool.New(functiontool.Config{
+		Name: "calendar_list_events",
+		Description: "List events on the primary Google Calendar within a time window. " +
+			"If timeMinRFC3339/timeMaxRFC3339 are omitted, defaults to today (JST, 00:00-24:00). " +
+			"Returns title, start, end, and htmlLink for each event.",
+	}, listEvents(svc))
+	if err != nil {
+		return nil, err
+	}
+
+	return []tool.Tool{createTool, listTool}, nil
 }
 
 // Optional fields need `omitempty`: the inferred JSON schema marks fields
@@ -80,4 +96,87 @@ func createEvent(svc *calendar.Service, mode config.ActionMode) functiontool.Fun
 		}
 		return createResult{EventID: created.Id, HTMLink: created.HtmlLink, Status: "created"}
 	}
+}
+
+// listEventsInput's fields are both optional: omitting one (or both) is the
+// common case ("today"'s events), so both need `omitempty` or the LLM
+// omitting them fails the whole call. See .claude/rules/tool-json-schema.md.
+type listEventsInput struct {
+	TimeMinRFC3339 string `json:"timeMinRFC3339,omitempty"`
+	TimeMaxRFC3339 string `json:"timeMaxRFC3339,omitempty"`
+}
+
+type eventSummary struct {
+	Title    string `json:"title"`
+	Start    string `json:"start"`
+	End      string `json:"end"`
+	HTMLLink string `json:"htmlLink"`
+}
+
+// Events must carry `omitempty`: a nil slice on a day with zero events would
+// otherwise serialize to `events: null`, which fails the ADK's inferred-schema
+// validation despite the handler succeeding. See
+// .claude/rules/tool-json-schema.md.
+type listEventsResult struct {
+	Events []eventSummary `json:"events,omitempty"`
+	Status string         `json:"status"`
+	Error  string         `json:"error,omitempty"`
+}
+
+func listEvents(svc *calendar.Service) functiontool.Func[listEventsInput, listEventsResult] {
+	return func(ctx tool.Context, in listEventsInput) listEventsResult {
+		timeMin, timeMax := resolveWindow(in, time.Now())
+		resp, err := svc.Events.List(primaryCalendar).
+			TimeMin(timeMin).TimeMax(timeMax).
+			SingleEvents(true).OrderBy("startTime").
+			Context(ctx).Do()
+		if err != nil {
+			return listEventsResult{Status: "error", Error: err.Error()}
+		}
+		out := listEventsResult{Status: "success"}
+		for _, e := range resp.Items {
+			out.Events = append(out.Events, eventSummary{
+				Title:    e.Summary,
+				Start:    eventTime(e.Start),
+				End:      eventTime(e.End),
+				HTMLLink: e.HtmlLink,
+			})
+		}
+		return out
+	}
+}
+
+// resolveWindow fills in any of timeMinRFC3339/timeMaxRFC3339 the caller
+// omitted with the bounds of now's JST calendar day, so the LLM can ask for
+// "today" without computing a window itself. now is passed in (rather than
+// calling time.Now internally) so this stays deterministic under test.
+func resolveWindow(in listEventsInput, now time.Time) (timeMin, timeMax string) {
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		loc = time.UTC
+	}
+	local := now.In(loc)
+	startOfDay := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+
+	timeMin = in.TimeMinRFC3339
+	if timeMin == "" {
+		timeMin = startOfDay.Format(time.RFC3339)
+	}
+	timeMax = in.TimeMaxRFC3339
+	if timeMax == "" {
+		timeMax = startOfDay.AddDate(0, 0, 1).Format(time.RFC3339)
+	}
+	return timeMin, timeMax
+}
+
+// eventTime renders a calendar.EventDateTime for display: the RFC3339
+// DateTime for a timed event, or the plain Date for an all-day event.
+func eventTime(dt *calendar.EventDateTime) string {
+	if dt == nil {
+		return ""
+	}
+	if dt.DateTime != "" {
+		return dt.DateTime
+	}
+	return dt.Date
 }

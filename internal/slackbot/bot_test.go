@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/o-ga09/adk-go-sample/internal/slackfmt"
+	notifytools "github.com/o-ga09/adk-go-sample/internal/tools/notify"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/stretchr/testify/assert"
@@ -90,6 +91,28 @@ func TestParseAppMention(t *testing.T) {
 			}
 			assert.Equal(t, tt.wantMsg, msg)
 			assert.Equal(t, tt.wantText, text)
+		})
+	}
+}
+
+// TestIsDeliveryTool covers the tool-name check ask() uses to decide whether
+// a notify tool already posted the reply into the thread itself: both
+// slack_push (mail triage, #16) and calendar_digest_push (#14) post directly,
+// so a lastText fallback of "(応答がありませんでした)" must not follow either.
+func TestIsDeliveryTool(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{name: "slack_push", in: notifytools.ToolNameSlackPush, want: true},
+		{name: "calendar_digest_push", in: notifytools.ToolNameCalendarDigestPush, want: true},
+		{name: "その他のツール名は対象外", in: "gmail_list_messages", want: false},
+		{name: "空文字は対象外", in: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isDeliveryTool(tt.in))
 		})
 	}
 }

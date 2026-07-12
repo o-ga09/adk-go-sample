@@ -251,6 +251,155 @@ func TestSlackPushInputSchemaAllowsOmittedFields(t *testing.T) {
 	}
 }
 
+func TestCalendarDigestBlocks(t *testing.T) {
+	tests := []struct {
+		name string
+		in   calendarDigestInput
+		want []string
+	}{
+		{
+			name: "予定が複数件ある",
+			in: calendarDigestInput{
+				Events: []eventItem{
+					{Title: "定例MTG", HTMLLink: "https://calendar.google.com/event?eid=abc", When: "7/12 10:00"},
+					{Title: "歯医者", HTMLLink: "https://calendar.google.com/event?eid=def", When: "7/12 18:00"},
+				},
+			},
+			want: []string{
+				"HEADER: :calendar: 本日の予定",
+				"SECTION: ・<https://calendar.google.com/event?eid=abc|定例MTG> (7/12 10:00)\n" +
+					"・<https://calendar.google.com/event?eid=def|歯医者> (7/12 18:00)",
+			},
+		},
+		{
+			name: "予定が0件",
+			in:   calendarDigestInput{},
+			want: []string{"HEADER: :calendar: 本日の予定はありません"},
+		},
+		{
+			name: "htmlLinkが空のイベントはリンク化しない(dry_run等)",
+			in: calendarDigestInput{
+				Events: []eventItem{
+					{Title: "定例MTG", HTMLLink: "", When: "7/12 10:00"},
+				},
+			},
+			want: []string{
+				"HEADER: :calendar: 本日の予定",
+				"SECTION: ・定例MTG (7/12 10:00)",
+			},
+		},
+		{
+			name: "タイトルと日時のエスケープ",
+			in: calendarDigestInput{
+				Events: []eventItem{
+					{Title: "A&B", HTMLLink: "https://calendar.example/e1", When: "<7/12>"},
+				},
+			},
+			want: []string{
+				"HEADER: :calendar: 本日の予定",
+				"SECTION: ・<https://calendar.example/e1|A&amp;B> (&lt;7/12&gt;)",
+			},
+		},
+		{
+			name: "件名が空のイベントはプレースホルダーになる",
+			in: calendarDigestInput{
+				Events: []eventItem{
+					{Title: "", HTMLLink: "https://calendar.example/e1", When: "7/12 10:00"},
+				},
+			},
+			want: []string{
+				"HEADER: :calendar: 本日の予定",
+				"SECTION: ・<https://calendar.example/e1|(件名なし)> (7/12 10:00)",
+			},
+		},
+		{
+			name: "予定0件でもnoteはContext blockで表示される",
+			in: calendarDigestInput{
+				Note: "テスト & <確認>",
+			},
+			want: []string{
+				"HEADER: :calendar: 本日の予定はありません",
+				"CONTEXT: テスト &amp; &lt;確認&gt;",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := blockLines(t, calendarDigestBlocks(tt.in))
+			if len(got) != len(tt.want) {
+				t.Fatalf("calendarDigestBlocks() = %d blocks, want %d\ngot:  %#v\nwant: %#v", len(got), len(tt.want), got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("block[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestCalendarDigestBlocks_CapsLargeListsAndStaysUnderLimits mirrors
+// TestSummaryBlocks_CapsLargeListsAndStaysUnderLimits for the calendar
+// digest: an unusually full day must still cap the rendered list and never
+// exceed Slack's per-message limits.
+func TestCalendarDigestBlocks_CapsLargeListsAndStaysUnderLimits(t *testing.T) {
+	in := calendarDigestInput{}
+	for i := 0; i < 200; i++ {
+		in.Events = append(in.Events, eventItem{
+			Title:    fmt.Sprintf("イベント%d", i),
+			HTMLLink: fmt.Sprintf("https://calendar.example/%d", i),
+			When:     "7/12 10:00",
+		})
+	}
+
+	blocks := calendarDigestBlocks(in)
+	if len(blocks) > 50 {
+		t.Fatalf("calendarDigestBlocks() = %d blocks, want <= 50 (Slack's per-message limit)", len(blocks))
+	}
+
+	var sawOmissionNote bool
+	for _, b := range blocks {
+		sb, ok := b.(*slack.SectionBlock)
+		if !ok || sb.Text == nil {
+			continue
+		}
+		if len(sb.Text.Text) > 3000 {
+			t.Errorf("section block text len = %d, want <= 3000", len(sb.Text.Text))
+		}
+		if strings.Contains(sb.Text.Text, "ほか") {
+			sawOmissionNote = true
+		}
+	}
+	if !sawOmissionNote {
+		t.Error("calendarDigestBlocks() with 200 events did not note the omitted count anywhere")
+	}
+}
+
+// TestCalendarDigestInputSchemaAllowsOmittedFields replays the validation the
+// ADK's functiontool runs on every call: fields without omitempty are
+// required in the inferred schema, so the LLM omitting events on a day with
+// zero registered events would fail the whole tool call.
+func TestCalendarDigestInputSchemaAllowsOmittedFields(t *testing.T) {
+	schema, err := jsonschema.For[calendarDigestInput](nil)
+	if err != nil {
+		t.Fatalf("infer schema: %v", err)
+	}
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		t.Fatalf("resolve schema: %v", err)
+	}
+	for _, payload := range []string{`{}`, `{"note":"本日の予定はありません"}`} {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(payload), &m); err != nil {
+			t.Fatal(err)
+		}
+		if err := resolved.Validate(m); err != nil {
+			t.Errorf("payload %s rejected by inferred schema: %v", payload, err)
+		}
+	}
+}
+
 // TestEscapeIsSlackfmtEscape guards against the notify package silently
 // reintroducing its own escaping instead of reusing the shared helper.
 func TestEscapeIsSlackfmtEscape(t *testing.T) {

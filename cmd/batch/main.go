@@ -2,9 +2,10 @@
 // intended to be invoked on a schedule by an ArgoWorkflows CronWorkflow (one
 // Job per run). All behaviour is driven by environment configuration.
 //
-// It supports three -command values:
+// It supports four -command values:
 //
 //	batch -command mail              # default: triage the inbox (existing CronWorkflow behaviour)
+//	batch -command calendar-digest   # post today's calendar events to Slack (#14)
 //	batch -command llm-cost-report   # post yesterday's LLM usage cost summary to Slack
 //	batch -command weekly-review     # post the GTD weekly-review summary to Slack
 package main
@@ -30,19 +31,21 @@ import (
 )
 
 func main() {
-	command := flag.String("command", "mail", "batch command to run: mail (default), llm-cost-report, or weekly-review")
+	command := flag.String("command", "mail", "batch command to run: mail (default), calendar-digest, llm-cost-report, or weekly-review")
 	flag.Parse()
 
 	var err error
 	switch *command {
 	case "mail":
 		err = runMail()
+	case "calendar-digest":
+		err = runCalendarDigest()
 	case "llm-cost-report":
 		err = runLLMCostReport()
 	case "weekly-review":
 		err = runWeeklyReview()
 	default:
-		err = fmt.Errorf("unsupported -command %q (want mail|llm-cost-report|weekly-review)", *command)
+		err = fmt.Errorf("unsupported -command %q (want mail|calendar-digest|llm-cost-report|weekly-review)", *command)
 	}
 	if err != nil {
 		log.Fatalf("batch failed: %v", err)
@@ -53,13 +56,34 @@ func main() {
 // behaviour. Kept as the default -command so the existing CronWorkflow,
 // which invokes the binary with no arguments, is unaffected.
 func runMail() error {
-	ctx := context.Background()
 	c := config.Load()
 	if err := c.ValidateForBatch(); err != nil {
 		return err
 	}
-	ctx = llmusage.WithTrigger(ctx, llmusage.TriggerBatch)
 	log.Printf("starting gmail batch: mode=%s query=%q", c.ActionMode, c.GmailQuery)
+	return runAgentPrompt(c, "受信トレイを整理して通知してください。")
+}
+
+// runCalendarDigest posts today's calendar events to Slack, via the agent's
+// calendar_list_events + calendar_digest_push tools (業務E in
+// internal/agents/gmail). Intended for a separate CronWorkflow step (or
+// schedule) than -command mail; see README.md.
+func runCalendarDigest() error {
+	c := config.Load()
+	if err := c.ValidateForBatch(); err != nil {
+		return err
+	}
+	log.Printf("starting calendar digest batch: mode=%s", c.ActionMode)
+	return runAgentPrompt(c, "今日の予定一覧をSlackに通知してください。")
+}
+
+// runAgentPrompt builds the shared app dependencies, runs the agent once with
+// prompt as the user message in a fresh cron session, and logs the exchange.
+// Shared by runMail and runCalendarDigest, which differ only in the prompt
+// text (and thus which business the agent's instruction routes to).
+func runAgentPrompt(c *config.Config, prompt string) error {
+	ctx := context.Background()
+	ctx = llmusage.WithTrigger(ctx, llmusage.TriggerBatch)
 
 	deps, err := app.Build(ctx, c)
 	if err != nil {
@@ -88,7 +112,7 @@ func runMail() error {
 		return fmt.Errorf("create session: %w", err)
 	}
 
-	msg := genai.NewContentFromText("受信トレイを整理して通知してください。", genai.RoleUser)
+	msg := genai.NewContentFromText(prompt, genai.RoleUser)
 
 	var lastText string
 	for ev, err := range r.Run(ctx, userID, sessionID, msg, agent.RunConfig{}) {
