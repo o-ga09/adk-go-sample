@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
 
 // ActionMode controls how aggressively the Gmail agent mutates the mailbox.
@@ -49,6 +50,15 @@ type Config struct {
 
 	// API server
 	AppName string
+
+	// LLM usage cost tracking (internal/llmusage). LLMPricingJSON, if set,
+	// overrides/extends the built-in per-model $/1M-token pricing table so a
+	// Google pricing revision doesn't require a code change.
+	// LLMCostDailyAlertUSD, if > 0, marks the daily Slack cost report as a
+	// warning once that day's estimated cost reaches it; 0 disables the
+	// warning.
+	LLMPricingJSON       string
+	LLMCostDailyAlertUSD float64
 }
 
 // Load reads configuration from the environment, applying sensible defaults.
@@ -67,6 +77,9 @@ func Load() *Config {
 		GmailQuery:         envOr("GMAIL_QUERY", "in:inbox is:unread newer_than:1d"),
 		ActionMode:         ActionMode(envOr("ACTION_MODE", string(ModeLabelOnly))),
 		AppName:            envOr("APP_NAME", "gmail_secretary"),
+
+		LLMPricingJSON:       os.Getenv("LLM_PRICING_JSON"),
+		LLMCostDailyAlertUSD: envOrFloat("LLM_COST_DAILY_ALERT_USD", 0),
 	}
 	return c
 }
@@ -102,4 +115,19 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envOrFloat parses key as a float64, falling back to def if unset or
+// unparseable (a malformed LLM_COST_DAILY_ALERT_USD should not stop the
+// process from starting; it just disables the alert-threshold behaviour).
+func envOrFloat(key string, def float64) float64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return def
+	}
+	return f
 }

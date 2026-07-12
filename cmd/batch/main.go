@@ -1,11 +1,17 @@
-// Command batch runs the Gmail secretary agent once and exits. It is intended
-// to be invoked on a schedule by an ArgoWorkflows CronWorkflow (one Job per
-// run). All behaviour is driven by environment configuration.
+// Command batch runs the Gmail secretary agent once and exits. It is
+// intended to be invoked on a schedule by an ArgoWorkflows CronWorkflow (one
+// Job per run). All behaviour is driven by environment configuration.
+//
+// It supports two -command values:
+//
+//	batch -command mail              # default: triage the inbox (existing CronWorkflow behaviour)
+//	batch -command llm-cost-report   # post yesterday's LLM usage cost summary to Slack
 package main
 
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +19,8 @@ import (
 
 	"github.com/o-ga09/adk-go-sample/internal/app"
 	"github.com/o-ga09/adk-go-sample/internal/config"
+	"github.com/o-ga09/adk-go-sample/internal/llmusage"
+	"github.com/o-ga09/adk-go-sample/internal/store"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
@@ -20,17 +28,33 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	command := flag.String("command", "mail", "batch command to run: mail (default) or llm-cost-report")
+	flag.Parse()
+
+	var err error
+	switch *command {
+	case "mail":
+		err = runMail()
+	case "llm-cost-report":
+		err = runLLMCostReport()
+	default:
+		err = fmt.Errorf("unsupported -command %q (want mail|llm-cost-report)", *command)
+	}
+	if err != nil {
 		log.Fatalf("batch failed: %v", err)
 	}
 }
 
-func run() error {
+// runMail triages the inbox: the batch's original (and only, pre-#16)
+// behaviour. Kept as the default -command so the existing CronWorkflow,
+// which invokes the binary with no arguments, is unaffected.
+func runMail() error {
 	ctx := context.Background()
 	c := config.Load()
 	if err := c.ValidateForBatch(); err != nil {
 		return err
 	}
+	ctx = llmusage.WithTrigger(ctx, llmusage.TriggerBatch)
 	log.Printf("starting gmail batch: mode=%s query=%q", c.ActionMode, c.GmailQuery)
 
 	deps, err := app.Build(ctx, c)
@@ -85,6 +109,50 @@ func run() error {
 
 	log.Printf("batch complete. final: %s", lastText)
 	_ = os.Stdout.Sync()
+	return nil
+}
+
+// runLLMCostReport aggregates yesterday's (JST) LLM token usage recorded by
+// internal/llmusage and posts a cost summary to Slack. It intentionally does
+// not call app.Build: this command never talks to Gmail/Calendar/Gemini, so
+// it skips the Google OAuth setup app.Build would otherwise require.
+func runLLMCostReport() error {
+	ctx := context.Background()
+	c := config.Load()
+
+	if c.MySQLDSN == "" {
+		// Nothing was recorded (see store.UsageRecorder's no-op mode), so
+		// there is nothing to report; this must not be treated as failure.
+		log.Print("llm cost report skipped: MYSQL_DSN not set")
+		return nil
+	}
+
+	st, err := store.NewUsageRecorder(c)
+	if err != nil {
+		return fmt.Errorf("open usage store: %w", err)
+	}
+
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		loc = time.UTC
+	}
+	yesterday := time.Now().In(loc).AddDate(0, 0, -1)
+
+	report, err := llmusage.BuildDailyReport(ctx, st, yesterday, c.LLMCostDailyAlertUSD)
+	if err != nil {
+		return fmt.Errorf("build daily report: %w", err)
+	}
+
+	text := llmusage.FormatSlackMessage(report)
+	log.Print(text)
+
+	if c.SlackBotToken == "" || c.SlackChannelID == "" {
+		log.Print("llm cost report: Slack not configured, skipping post")
+		return nil
+	}
+	if err := llmusage.PostToSlack(ctx, c.SlackBotToken, c.SlackChannelID, text); err != nil {
+		return fmt.Errorf("post to slack: %w", err)
+	}
 	return nil
 }
 

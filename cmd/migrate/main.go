@@ -1,5 +1,6 @@
 // Command migrate creates or updates the MySQL schema used by the ADK
-// session service. It runs as an ArgoCD PreSync Job (infra repo:
+// session service and this project's own llm_usages table (internal/llmusage).
+// It runs as an ArgoCD PreSync Job (infra repo:
 // manifests/secretary/migration-job.yaml) so the tables exist before the API
 // and batch pods start. The CLI mirrors the MH-API/line-bot convention:
 //
