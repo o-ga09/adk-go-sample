@@ -2,10 +2,11 @@
 // intended to be invoked on a schedule by an ArgoWorkflows CronWorkflow (one
 // Job per run). All behaviour is driven by environment configuration.
 //
-// It supports two -command values:
+// It supports three -command values:
 //
 //	batch -command mail              # default: triage the inbox (existing CronWorkflow behaviour)
 //	batch -command llm-cost-report   # post yesterday's LLM usage cost summary to Slack
+//	batch -command weekly-review     # post the GTD weekly-review summary to Slack
 package main
 
 import (
@@ -21,6 +22,7 @@ import (
 	"github.com/o-ga09/adk-go-sample/internal/config"
 	"github.com/o-ga09/adk-go-sample/internal/llmusage"
 	"github.com/o-ga09/adk-go-sample/internal/store"
+	"github.com/o-ga09/adk-go-sample/internal/weeklyreview"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
@@ -28,7 +30,7 @@ import (
 )
 
 func main() {
-	command := flag.String("command", "mail", "batch command to run: mail (default) or llm-cost-report")
+	command := flag.String("command", "mail", "batch command to run: mail (default), llm-cost-report, or weekly-review")
 	flag.Parse()
 
 	var err error
@@ -37,8 +39,10 @@ func main() {
 		err = runMail()
 	case "llm-cost-report":
 		err = runLLMCostReport()
+	case "weekly-review":
+		err = runWeeklyReview()
 	default:
-		err = fmt.Errorf("unsupported -command %q (want mail|llm-cost-report)", *command)
+		err = fmt.Errorf("unsupported -command %q (want mail|llm-cost-report|weekly-review)", *command)
 	}
 	if err != nil {
 		log.Fatalf("batch failed: %v", err)
@@ -151,6 +155,53 @@ func runLLMCostReport() error {
 		return nil
 	}
 	if err := llmusage.PostToSlack(ctx, c.SlackBotToken, c.SlackChannelID, text); err != nil {
+		return fmt.Errorf("post to slack: %w", err)
+	}
+	return nil
+}
+
+// runWeeklyReview aggregates the current GTD task state (internal/store's
+// TaskStore) and posts a weekly-review summary to Slack: unprocessed inbox
+// items, stalled next/waiting tasks, and prioritized next actions. Like
+// runLLMCostReport it does not call app.Build: this command never talks to
+// Gmail/Calendar/Gemini, so it skips the Google OAuth setup app.Build would
+// otherwise require.
+func runWeeklyReview() error {
+	ctx := context.Background()
+	c := config.Load()
+
+	if c.MySQLDSN == "" {
+		// The in-memory TaskStore fallback starts empty on every process, so
+		// there is nothing meaningful to review; this must not be treated as
+		// failure (mirrors runLLMCostReport's MYSQL_DSN-unset handling).
+		log.Print("weekly review skipped: MYSQL_DSN not set")
+		return nil
+	}
+
+	st, err := store.NewTaskStore(c.MySQLDSN)
+	if err != nil {
+		return fmt.Errorf("open task store: %w", err)
+	}
+
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		loc = time.UTC
+	}
+	now := time.Now().In(loc)
+
+	report, err := weeklyreview.BuildReport(ctx, st, now, c.WeeklyReviewStaleDays)
+	if err != nil {
+		return fmt.Errorf("build weekly review: %w", err)
+	}
+
+	text := weeklyreview.FormatSlackMessage(report)
+	log.Print(text)
+
+	if c.SlackBotToken == "" || c.SlackChannelID == "" {
+		log.Print("weekly review: Slack not configured, skipping post")
+		return nil
+	}
+	if err := weeklyreview.PostToSlack(ctx, c.SlackBotToken, c.SlackChannelID, text); err != nil {
 		return fmt.Errorf("post to slack: %w", err)
 	}
 	return nil

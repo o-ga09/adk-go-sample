@@ -35,7 +35,9 @@ func Tools(st store.TaskStore, mode config.ActionMode) ([]tool.Tool, error) {
 	listTool, err := functiontool.New(functiontool.Config{
 		Name: "task_list",
 		Description: "List GTD tasks, optionally filtered by status (inbox/next/waiting/someday/done), context " +
-			"(e.g. @home, @pc), or project.",
+			"(e.g. @home, @pc), or project. Results are ordered by priority: overdue tasks first (most overdue " +
+			"first), then upcoming due dates soonest-first, then tasks with no due date (oldest-created first). " +
+			"For a \"what should I do now\" suggestion, call with status=next and take the first few results.",
 	}, taskList(st))
 	if err != nil {
 		return nil, err
@@ -159,6 +161,7 @@ func doTaskList(ctx context.Context, st store.TaskStore, in listInput) listResul
 	if err != nil {
 		return listResult{Status: "error", Error: err.Error()}
 	}
+	tasks = store.SortByPriority(tasks)
 	out := listResult{Status: "success"}
 	for _, t := range tasks {
 		out.Tasks = append(out.Tasks, toTaskItem(t))

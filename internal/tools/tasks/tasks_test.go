@@ -148,6 +148,35 @@ func TestTaskList_FiltersByStatus(t *testing.T) {
 	}
 }
 
+func TestTaskList_OrdersByPriority(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+
+	far := doTaskAdd(ctx, st, config.ModeLabelOnly, addInput{Title: "来月の締め切り", Due: "2026-08-15T00:00:00Z"})
+	none := doTaskAdd(ctx, st, config.ModeLabelOnly, addInput{Title: "期限なし"})
+	soon := doTaskAdd(ctx, st, config.ModeLabelOnly, addInput{Title: "明日の締め切り", Due: "2026-07-13T00:00:00Z"})
+	next := store.TaskStatusNext
+	for _, id := range []string{far.ID, none.ID, soon.ID} {
+		if _, err := st.Update(ctx, id, store.TaskPatch{Status: &next}); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+	}
+
+	got := doTaskList(ctx, st, listInput{Status: "next"})
+	if got.Status != "success" {
+		t.Fatalf("Status = %q, want success (err=%q)", got.Status, got.Error)
+	}
+	wantOrder := []string{soon.ID, far.ID, none.ID}
+	if len(got.Tasks) != len(wantOrder) {
+		t.Fatalf("Tasks = %+v, want %d items", got.Tasks, len(wantOrder))
+	}
+	for i, id := range wantOrder {
+		if got.Tasks[i].ID != id {
+			t.Errorf("position %d = %q (%s), want %q", i, got.Tasks[i].ID, got.Tasks[i].Title, id)
+		}
+	}
+}
+
 func TestTaskList_InvalidStatusReturnsError(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
