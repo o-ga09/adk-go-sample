@@ -3,7 +3,9 @@
 // WebSocket the bot itself opens), so no public HTTP endpoint or Events API
 // signing secret is required. Each @mention's text is forwarded verbatim to
 // the same agent used by cmd/batch and the ADK REST API, and the agent's
-// final reply is posted back in the same Slack thread.
+// final reply is posted back in the same Slack thread. Once a thread has
+// been started this way, plain messages in that thread (no @mention needed)
+// keep talking to the same agent session too.
 package slackbot
 
 import (
@@ -48,12 +50,18 @@ type Listener struct {
 	socket    *socketmode.Client
 	run       *runner.Runner
 	sessionSv session.Service
+	// botUserID is this bot's own Slack user ID (e.g. "U0123456"), used to
+	// recognize "<@botUserID>" mentions inside plain "message" events so a
+	// message that mentions the bot isn't double-handled by both the
+	// app_mention and message event for the same underlying Slack message.
+	// Left empty (dedup skipped) if auth.test fails at startup.
+	botUserID string
 }
 
 // New builds a Listener. It returns an error if the ADK runner cannot be
 // constructed; Slack connectivity itself is only established once Run is
 // called.
-func New(cfg Config) (*Listener, error) {
+func New(ctx context.Context, cfg Config) (*Listener, error) {
 	api := slack.New(cfg.App.SlackBotToken, slack.OptionAppLevelToken(cfg.App.SlackAppToken))
 	socket := socketmode.New(api)
 
@@ -67,12 +75,20 @@ func New(cfg Config) (*Listener, error) {
 		return nil, fmt.Errorf("create runner: %w", err)
 	}
 
+	var botUserID string
+	if auth, err := api.AuthTestContext(ctx); err != nil {
+		log.Printf("slackbot: auth.test failed, thread replies without @mention will be ignored: %v", err)
+	} else {
+		botUserID = auth.UserID
+	}
+
 	return &Listener{
 		app:       cfg.App,
 		api:       api,
 		socket:    socket,
 		run:       r,
 		sessionSv: cfg.SessionService,
+		botUserID: botUserID,
 	}, nil
 }
 
@@ -104,28 +120,156 @@ func (l *Listener) Run(ctx context.Context) error {
 	return l.socket.RunContext(ctx)
 }
 
+// incomingMessage is a normalized view over the two Slack event types this
+// listener responds to (app_mention and plain thread replies), so ask/reply
+// don't need to know which one triggered them.
+type incomingMessage struct {
+	Channel         string
+	User            string
+	TimeStamp       string
+	ThreadTimeStamp string
+}
+
+// threadKey identifies the Slack thread a message belongs to: its own
+// ThreadTimeStamp, or its own TimeStamp if it's not part of a thread (e.g. a
+// top-level @mention, which starts a new thread rooted at itself).
+func (m incomingMessage) threadKey() string {
+	if m.ThreadTimeStamp != "" {
+		return m.ThreadTimeStamp
+	}
+	return m.TimeStamp
+}
+
+// sessionID is the ADK session this message's thread is tracked under; see
+// ask for why one session is reused per Slack thread.
+func (m incomingMessage) sessionID() string {
+	return fmt.Sprintf("slack-%s-%s", m.Channel, m.threadKey())
+}
+
 func (l *Listener) handleEventsAPI(ctx context.Context, outer slackevents.EventsAPIEvent) {
-	if outer.InnerEvent.Type != "app_mention" {
+	switch outer.InnerEvent.Type {
+	case "app_mention":
+		l.handleAppMention(ctx, outer)
+	case "message":
+		l.handleThreadReply(ctx, outer)
+	}
+}
+
+// parseAppMention normalizes an AppMentionEvent into an incomingMessage plus
+// the user's text with the leading mention token stripped. ok is false for
+// malformed payloads and for mentions triggered by other bots (BotID set).
+// The returned text may be empty (a bare "@bot" with nothing after it); the
+// caller decides how to respond to that, since it differs from the "ignore
+// entirely" cases that make ok false.
+func parseAppMention(mention *slackevents.AppMentionEvent) (msg incomingMessage, text string, ok bool) {
+	if mention == nil || mention.BotID != "" {
+		return incomingMessage{}, "", false
+	}
+	msg = incomingMessage{
+		Channel:         mention.Channel,
+		User:            mention.User,
+		TimeStamp:       mention.TimeStamp,
+		ThreadTimeStamp: mention.ThreadTimeStamp,
+	}
+	text = strings.TrimSpace(mentionRE.ReplaceAllString(mention.Text, ""))
+	return msg, text, true
+}
+
+func (l *Listener) handleAppMention(ctx context.Context, outer slackevents.EventsAPIEvent) {
+	mention, ok := outer.InnerEvent.Data.(*slackevents.AppMentionEvent)
+	if !ok {
 		return
 	}
-	mention, ok := outer.InnerEvent.Data.(*slackevents.AppMentionEvent)
-	if !ok || mention.BotID != "" {
+	msg, text, ok := parseAppMention(mention)
+	if !ok {
 		return // ignore malformed payloads and mentions triggered by other bots
 	}
 
-	if l.app.SlackAllowedUserID != "" && mention.User != l.app.SlackAllowedUserID {
-		l.reply(ctx, mention, slackfmt.Sections("すみません、このエージェントは登録済みユーザーのみ利用できます。"))
+	if l.app.SlackAllowedUserID != "" && msg.User != l.app.SlackAllowedUserID {
+		l.reply(ctx, msg, slackfmt.Sections("すみません、このエージェントは登録済みユーザーのみ利用できます。"))
 		return
 	}
 
-	text := mentionRE.ReplaceAllString(mention.Text, "")
-	text = strings.TrimSpace(text)
 	if text == "" {
-		l.reply(ctx, mention, slackfmt.Sections("ご用件をメンションの後に書いてください。例: 「@agent 受信トレイを整理して」"))
+		l.reply(ctx, msg, slackfmt.Sections("ご用件をメンションの後に書いてください。例: 「@agent 受信トレイを整理して」"))
 		return
 	}
 
-	blocks, err := l.ask(ctx, mention, text)
+	l.respond(ctx, msg, text)
+}
+
+// parseThreadReply normalizes a plain "message" event into an incomingMessage
+// plus its text, or reports ok=false when the event should be ignored:
+// bot-authored messages (BotID set, e.g. this bot's own replies echoed back),
+// any non-empty SubType (edits, deletes, channel-join notices, ...), messages
+// that aren't a reply within a thread, a thread's own root message, a message
+// that also mentions this bot (Slack delivers that as a separate app_mention
+// event, which is handled by handleAppMention instead — treating it here too
+// would run the agent twice for one Slack message), and blank text.
+func parseThreadReply(ev *slackevents.MessageEvent, botUserID string) (msg incomingMessage, text string, ok bool) {
+	if ev == nil || ev.BotID != "" || ev.SubType != "" {
+		return incomingMessage{}, "", false
+	}
+	if ev.ThreadTimeStamp == "" || ev.ThreadTimeStamp == ev.TimeStamp {
+		return incomingMessage{}, "", false
+	}
+	if botUserID != "" && strings.Contains(ev.Text, "<@"+botUserID+">") {
+		return incomingMessage{}, "", false
+	}
+	text = strings.TrimSpace(ev.Text)
+	if text == "" {
+		return incomingMessage{}, "", false
+	}
+	msg = incomingMessage{
+		Channel:         ev.Channel,
+		User:            ev.User,
+		TimeStamp:       ev.TimeStamp,
+		ThreadTimeStamp: ev.ThreadTimeStamp,
+	}
+	return msg, text, true
+}
+
+// handleThreadReply lets a user keep talking to the agent in a thread
+// without re-@mentioning it every time, once that thread already has an ADK
+// session (created by an initial @mention). Threads the bot was never
+// mentioned in are left alone, so it doesn't start responding to unrelated
+// conversations it happens to receive message events for.
+func (l *Listener) handleThreadReply(ctx context.Context, outer slackevents.EventsAPIEvent) {
+	ev, ok := outer.InnerEvent.Data.(*slackevents.MessageEvent)
+	if !ok {
+		return
+	}
+	msg, text, ok := parseThreadReply(ev, l.botUserID)
+	if !ok {
+		return
+	}
+
+	if l.app.SlackAllowedUserID != "" && msg.User != l.app.SlackAllowedUserID {
+		return // stay silent for other users rather than replying into a thread they may not own
+	}
+
+	if !l.hasSession(ctx, msg) {
+		return // this thread was never started with an @mention; don't self-invite
+	}
+
+	l.respond(ctx, msg, text)
+}
+
+// hasSession reports whether msg's thread already has an ADK session, i.e.
+// whether it was previously started with an @mention.
+func (l *Listener) hasSession(ctx context.Context, msg incomingMessage) bool {
+	_, err := l.sessionSv.Get(ctx, &session.GetRequest{
+		AppName:   l.app.AppName,
+		UserID:    msg.User,
+		SessionID: msg.sessionID(),
+	})
+	return err == nil
+}
+
+// respond runs the agent on text and posts its reply (if any) back into
+// msg's thread.
+func (l *Listener) respond(ctx context.Context, msg incomingMessage, text string) {
+	blocks, err := l.ask(ctx, msg, text)
 	if err != nil {
 		log.Printf("slackbot: agent run failed: %v", err)
 		blocks = slackfmt.Sections(fmt.Sprintf("エラーが発生しました: %v", err))
@@ -133,25 +277,22 @@ func (l *Listener) handleEventsAPI(ctx context.Context, outer slackevents.Events
 	if blocks == nil {
 		return // summary already delivered into the thread by slack_push
 	}
-	l.reply(ctx, mention, blocks)
+	l.reply(ctx, msg, blocks)
 }
 
 // ask runs the agent with text as the user's message, reusing one ADK
 // session per Slack thread so multi-turn conversations keep context. It
 // returns nil blocks (and no error) when the agent already delivered its
-// reply itself via slack_push, so handleEventsAPI knows not to post again.
-func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent, text string) ([]slack.Block, error) {
+// reply itself via slack_push, so respond knows not to post again.
+func (l *Listener) ask(ctx context.Context, msg incomingMessage, text string) ([]slack.Block, error) {
 	// Tags every LLM call made while handling this request as
 	// llmusage.TriggerSlack instead of the default TriggerAPI, so the daily
 	// cost report can break usage down by trigger surface.
 	ctx = llmusage.WithTrigger(ctx, llmusage.TriggerSlack)
 
-	threadKey := mention.ThreadTimeStamp
-	if threadKey == "" {
-		threadKey = mention.TimeStamp
-	}
-	userID := mention.User
-	sessionID := fmt.Sprintf("slack-%s-%s", mention.Channel, threadKey)
+	threadKey := msg.threadKey()
+	userID := msg.User
+	sessionID := msg.sessionID()
 
 	if _, err := l.sessionSv.Get(ctx, &session.GetRequest{
 		AppName:   l.app.AppName,
@@ -166,7 +307,7 @@ func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent
 			// the summary back into the same thread instead of top-level to
 			// SLACK_CHANNEL_ID.
 			State: map[string]any{
-				notifytools.StateKeySlackChannel:  mention.Channel,
+				notifytools.StateKeySlackChannel:  msg.Channel,
 				notifytools.StateKeySlackThreadTS: threadKey,
 			},
 		}); err != nil {
@@ -174,12 +315,12 @@ func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent
 		}
 	}
 
-	msg := genai.NewContentFromText(text, genai.RoleUser)
+	content := genai.NewContentFromText(text, genai.RoleUser)
 
 	var lastText string
 	var summaryPosted bool
 	var fetchedTitle, fetchedURL string
-	for ev, err := range l.run.Run(ctx, userID, sessionID, msg, agent.RunConfig{}) {
+	for ev, err := range l.run.Run(ctx, userID, sessionID, content, agent.RunConfig{}) {
 		if err != nil {
 			return nil, fmt.Errorf("agent run: %w", err)
 		}
@@ -272,12 +413,8 @@ func compactJSON(v map[string]any) string {
 	return string(b)
 }
 
-func (l *Listener) reply(ctx context.Context, mention *slackevents.AppMentionEvent, blocks []slack.Block) {
-	threadTS := mention.ThreadTimeStamp
-	if threadTS == "" {
-		threadTS = mention.TimeStamp
-	}
-	if _, _, err := l.api.PostMessageContext(ctx, mention.Channel, slack.MsgOptionBlocks(blocks...), slack.MsgOptionTS(threadTS)); err != nil {
+func (l *Listener) reply(ctx context.Context, msg incomingMessage, blocks []slack.Block) {
+	if _, _, err := l.api.PostMessageContext(ctx, msg.Channel, slack.MsgOptionBlocks(blocks...), slack.MsgOptionTS(msg.threadKey())); err != nil {
 		log.Printf("slackbot: failed to post reply: %v", err)
 	}
 }
