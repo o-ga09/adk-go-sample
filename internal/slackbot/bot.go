@@ -127,6 +127,9 @@ func (l *Listener) handleEventsAPI(ctx context.Context, outer slackevents.Events
 		log.Printf("slackbot: agent run failed: %v", err)
 		reply = fmt.Sprintf("エラーが発生しました: %v", err)
 	}
+	if reply == "" {
+		return // summary already delivered into the thread by slack_push
+	}
 	l.reply(ctx, mention, reply)
 }
 
@@ -164,6 +167,7 @@ func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent
 	msg := genai.NewContentFromText(text, genai.RoleUser)
 
 	var lastText string
+	var summaryPosted bool
 	for ev, err := range l.run.Run(ctx, userID, sessionID, msg, agent.RunConfig{}) {
 		if err != nil {
 			return "", fmt.Errorf("agent run: %w", err)
@@ -178,11 +182,23 @@ func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent
 				}
 				if p.FunctionResponse != nil {
 					log.Printf("slackbot: [%s] tool-response: %s %s", ev.Author, p.FunctionResponse.Name, compactJSON(p.FunctionResponse.Response))
+					if p.FunctionResponse.Name == notifytools.ToolNameSlackPush {
+						if s, _ := p.FunctionResponse.Response["status"].(string); s == notifytools.StatusSlackPushSent {
+							summaryPosted = true
+						}
+					}
 				}
 			}
 		}
 	}
 	if lastText == "" {
+		// For the mail-triage task the agent delivers its summary itself via
+		// slack_push (into this same thread) and may end its turn without any
+		// final text; replying "(応答がありませんでした)" on top of the summary
+		// reads like a failure. Only fall back when nothing was delivered.
+		if summaryPosted {
+			return "", nil
+		}
 		lastText = "(応答がありませんでした)"
 	}
 	return lastText, nil
