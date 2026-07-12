@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   lint-and-test:
@@ -31,14 +32,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: gofmt check
-        run: |
-          fmt_out="$(gofmt -l .)"
-          if [ -n "$fmt_out" ]; then
-            echo "The following files are not gofmt-formatted:"
-            echo "$fmt_out"
-            exit 1
-          fi
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
 
       - name: go vet
         run: go vet ./...
@@ -47,7 +44,12 @@ jobs:
         run: go build ./...
 
       - name: go test
-        run: go test ./...
+        run: go test ./... -coverprofile=coverage.out
+
+      - name: Run octocov
+        uses: k1LoW/octocov-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   docker-build:
     runs-on: ubuntu-latest

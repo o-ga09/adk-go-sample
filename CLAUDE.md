@@ -10,7 +10,8 @@ A personal secretary agent built with ADK for Go (`google.golang.org/adk`) + Gem
 
 ```sh
 go build ./...                       # build everything
-go vet ./...                        # lint (no other linter configured)
+go vet ./...                        # lint
+golangci-lint run                   # additional lint (config: .golangci.yml); CI runs this via golangci-lint-action
 go test ./...                       # tests (currently just internal/tools/goblog's HTML-extraction logic)
 
 ACTION_MODE=dry_run go run ./cmd/batch                    # one-shot agent run, no real changes (mail triage, the default -command)
