@@ -72,7 +72,7 @@ func fetchFeed(ctx context.Context) ([]postSummary, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 	return parseFeed(body)
 }
 

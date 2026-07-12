@@ -34,7 +34,9 @@ func main() {
 			http.Error(w, "missing code", http.StatusBadRequest)
 			return
 		}
-		fmt.Fprintln(w, "Authorization received. You can close this tab and return to the terminal.")
+		if _, err := fmt.Fprintln(w, "Authorization received. You can close this tab and return to the terminal."); err != nil {
+			log.Printf("callback response: %v", err)
+		}
 		codeCh <- code
 	})
 
