@@ -122,11 +122,11 @@ func TestParseThreadReply(t *testing.T) {
 	const botUserID = "BOTID"
 
 	tests := []struct {
-		name     string
-		ev       *slackevents.MessageEvent
-		wantOK   bool
-		wantMsg  incomingMessage
-		wantText string
+		name       string
+		ev         *slackevents.MessageEvent
+		wantIgnore string // "" = 処理対象
+		wantMsg    incomingMessage
+		wantText   string
 	}{
 		{
 			name: "正常系: スレッド内の素のメッセージを拾う",
@@ -134,7 +134,6 @@ func TestParseThreadReply(t *testing.T) {
 				User: "U1", Channel: "C1", TimeStamp: "111.000", ThreadTimeStamp: "100.000",
 				Text: "続きだけどこれも整理して",
 			},
-			wantOK:   true,
 			wantMsg:  incomingMessage{User: "U1", Channel: "C1", TimeStamp: "111.000", ThreadTimeStamp: "100.000"},
 			wantText: "続きだけどこれも整理して",
 		},
@@ -144,7 +143,7 @@ func TestParseThreadReply(t *testing.T) {
 				User: "U1", Channel: "C1", TimeStamp: "111.000", ThreadTimeStamp: "100.000",
 				Text: "hi", BotID: "B1",
 			},
-			wantOK: false,
+			wantIgnore: "bot message",
 		},
 		{
 			name: "異常系: message_changed等のsubtypeは無視する",
@@ -152,7 +151,7 @@ func TestParseThreadReply(t *testing.T) {
 				User: "U1", Channel: "C1", TimeStamp: "111.000", ThreadTimeStamp: "100.000",
 				Text: "hi", SubType: "message_changed",
 			},
-			wantOK: false,
+			wantIgnore: "subtype message_changed",
 		},
 		{
 			name: "異常系: スレッド外の通常メッセージは無視する",
@@ -160,7 +159,7 @@ func TestParseThreadReply(t *testing.T) {
 				User: "U1", Channel: "C1", TimeStamp: "111.000",
 				Text: "hi",
 			},
-			wantOK: false,
+			wantIgnore: "not a thread reply",
 		},
 		{
 			name: "異常系: スレッドの起点メッセージ自体は無視する",
@@ -168,7 +167,7 @@ func TestParseThreadReply(t *testing.T) {
 				User: "U1", Channel: "C1", TimeStamp: "100.000", ThreadTimeStamp: "100.000",
 				Text: "hi",
 			},
-			wantOK: false,
+			wantIgnore: "thread root message",
 		},
 		{
 			name: "異常系: ボットへの再メンションはapp_mention側に任せて無視する",
@@ -176,7 +175,7 @@ func TestParseThreadReply(t *testing.T) {
 				User: "U1", Channel: "C1", TimeStamp: "111.000", ThreadTimeStamp: "100.000",
 				Text: "<@BOTID> もう一度お願い",
 			},
-			wantOK: false,
+			wantIgnore: "re-mention, deferred to app_mention",
 		},
 		{
 			name: "異常系: 空白のみの本文は無視する",
@@ -184,19 +183,19 @@ func TestParseThreadReply(t *testing.T) {
 				User: "U1", Channel: "C1", TimeStamp: "111.000", ThreadTimeStamp: "100.000",
 				Text: "   ",
 			},
-			wantOK: false,
+			wantIgnore: "empty text",
 		},
 		{
-			name:   "異常系: nilイベントは無視する",
-			wantOK: false,
+			name:       "異常系: nilイベントは無視する",
+			wantIgnore: "nil event",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg, text, ok := parseThreadReply(tt.ev, botUserID)
-			assert.Equal(t, tt.wantOK, ok)
-			if !tt.wantOK {
+			msg, text, ignore := parseThreadReply(tt.ev, botUserID)
+			assert.Equal(t, tt.wantIgnore, ignore)
+			if tt.wantIgnore != "" {
 				return
 			}
 			assert.Equal(t, tt.wantMsg, msg)

@@ -79,7 +79,7 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
    }'
    ```
 6. **Slack から呼び出す/通知を受け取る(任意)**: Slack App を作成し、Socket Mode を有効化。
-   - Bot Token Scopes に `app_mentions:read` / `chat:write` / `channels:history`(スレッド内メッセージを読むため)を追加してワークスペースにインストール → `SLACK_BOT_TOKEN`(`xoxb-`)。プライベートチャンネルや DM のスレッドでも使いたい場合は `groups:history` / `im:history` / `mpim:history` も追加する。
+   - Bot Token Scopes に `app_mentions:read` / `chat:write` / `channels:history`(スレッド内メッセージを読むため)/ `reactions:write`(処理状況リアクション用)を追加してワークスペースにインストール → `SLACK_BOT_TOKEN`(`xoxb-`)。プライベートチャンネルや DM のスレッドでも使いたい場合は `groups:history` / `im:history` / `mpim:history` も追加する。`reactions:write` があると、依頼メッセージに処理中 :eyes: → 完了 :white_check_mark:(失敗時 :x:)のリアクションが付く(スコープ未追加でもリアクションが付かないだけで応答自体は動作する)。
    - 「Socket Mode」を ON にして App-Level Token を発行(`connections:write` スコープ)→ `SLACK_APP_TOKEN`(`xapp-`)。
    - Event Subscriptions で `app_mention` と `message.channels` イベントを購読(Socket Mode なので Request URL の設定は不要)。`message.channels` を購読すると、一度 `@メンション` して開始したスレッド内では以降メンションなしでも会話を続けられる(未購読でも `app_mention` だけで動作するが、毎回メンションが必要になる)。プライベートチャンネル/DM でも使う場合は対応する `message.groups` / `message.im` / `message.mpim` も購読する。
    - `SLACK_ALLOWED_USER_ID` に自分の Slack ユーザー ID を設定しておくと、他のユーザーからのメンション・スレッド内発言を無視できる(推奨。個人のメール/カレンダーを操作できるため)。
