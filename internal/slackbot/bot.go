@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/o-ga09/adk-go-sample/internal/config"
+	"github.com/o-ga09/adk-go-sample/internal/llmusage"
 	notifytools "github.com/o-ga09/adk-go-sample/internal/tools/notify"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -136,6 +137,11 @@ func (l *Listener) handleEventsAPI(ctx context.Context, outer slackevents.Events
 // ask runs the agent with text as the user's message, reusing one ADK
 // session per Slack thread so multi-turn conversations keep context.
 func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent, text string) (string, error) {
+	// Tags every LLM call made while handling this request as
+	// llmusage.TriggerSlack instead of the default TriggerAPI, so the daily
+	// cost report can break usage down by trigger surface.
+	ctx = llmusage.WithTrigger(ctx, llmusage.TriggerSlack)
+
 	threadKey := mention.ThreadTimeStamp
 	if threadKey == "" {
 		threadKey = mention.TimeStamp

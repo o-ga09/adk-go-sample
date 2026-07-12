@@ -44,6 +44,8 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 | `GMAIL_QUERY` | 整理対象の Gmail 検索クエリ | `in:inbox is:unread newer_than:1d` |
 | `ACTION_MODE` | `dry_run` \| `label_only` \| `auto_trash` | `label_only` |
 | `APP_NAME` | ADK アプリ名(UI の appName) | `gmail_secretary` |
+| `LLM_PRICING_JSON` | Gemini モデル別の $/1M トークン単価をJSONで上書き。例 `{"gemini-2.5-flash":{"inputPerMillionUSD":0.3,"outputPerMillionUSD":2.5,"cachedInputPerMillionUSD":0.075}}` | "" (内蔵の `gemini-2.5-flash` 単価のみ) |
+| `LLM_COST_DAILY_ALERT_USD` | この額(USD)以上の推定コストが出た日は日次レポートに警告を付ける | `0`(警告なし) |
 
 ## セットアップ手順
 
@@ -88,6 +90,18 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
      "newMessage":{"role":"user","parts":[{"text":"https://go.dev/blog/slices を要約して"}]}
    }'
    ```
+
+## LLM利用コストの日次通知(任意)
+
+cron バッチ・Slack 対話・Go Blog 要約など全トリガーの Gemini 呼び出しは、トークン使用量と推定コストが自動的に `llm_usages` テーブル(`MYSQL_DSN` 設定時のみ)に記録される。単価テーブルは `LLM_PRICING_JSON` で上書きでき、あくまで推定値であることに注意(Gemini API はキー単位の実請求額を公開していない)。
+
+前日分のサマリを Slack に投げるには、`cmd/batch` を `-command llm-cost-report` 付きで実行する(既定は `-command mail` で、これまで通りメール整理を行う):
+
+```sh
+go run ./cmd/batch -command llm-cost-report
+```
+
+`MYSQL_DSN` 未設定時は記録が存在しないため何もせず終了する(エラーにはしない)。本番では朝ダイジェスト等と同じ ArgoWorkflows CronWorkflow 基盤に、この `-command` 違いのステップとして相乗りさせる想定(インフラリポ側の対応が必要)。
 
 ## CI/CD(本リポジトリの責務)
 

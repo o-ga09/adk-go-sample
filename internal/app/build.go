@@ -5,10 +5,12 @@ package app
 import (
 	"context"
 	"fmt"
+	"log"
 
 	gmailagent "github.com/o-ga09/adk-go-sample/internal/agents/gmail"
 	"github.com/o-ga09/adk-go-sample/internal/config"
 	googleapi "github.com/o-ga09/adk-go-sample/internal/google"
+	"github.com/o-ga09/adk-go-sample/internal/llmusage"
 	"github.com/o-ga09/adk-go-sample/internal/store"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/artifact"
@@ -34,6 +36,7 @@ func Build(ctx context.Context, c *config.Config) (*Deps, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create model: %w", err)
 	}
+	m = wrapModelWithUsageTracking(ctx, c, m)
 
 	clients, err := googleapi.NewClients(ctx, c)
 	if err != nil {
@@ -58,4 +61,26 @@ func Build(ctx context.Context, c *config.Config) (*Deps, error) {
 		SessionService:  sess,
 		ArtifactService: artifact.InMemoryService(),
 	}, nil
+}
+
+// wrapModelWithUsageTracking decorates m so every call it makes (from any
+// trigger surface: batch, Slack, the ADK REST API, since they all share the
+// agent built from m) records its token usage and estimated cost. Unlike
+// store.NewSessionService, failures here are logged and degrade to a no-op
+// recorder rather than failing Build: the source issue for this feature
+// (#16) requires that a failure to record usage never stops the agent
+// itself from running, so this is intentionally more permissive than the
+// session service it sits next to.
+func wrapModelWithUsageTracking(_ context.Context, c *config.Config, m model.LLM) model.LLM {
+	rec, err := store.NewUsageRecorder(c)
+	if err != nil {
+		log.Printf("llmusage: usage recording disabled, continuing without it: %v", err)
+		rec = &store.UsageRecorder{}
+	}
+	pricing, err := llmusage.LoadPricing(c.LLMPricingJSON)
+	if err != nil {
+		log.Printf("llmusage: invalid LLM_PRICING_JSON, falling back to default pricing: %v", err)
+		pricing, _ = llmusage.LoadPricing("")
+	}
+	return llmusage.WrapModel(m, rec, pricing)
 }

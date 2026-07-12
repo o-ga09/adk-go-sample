@@ -91,9 +91,37 @@ type userStateSchema struct {
 
 func (userStateSchema) TableName() string { return "user_states" }
 
-// Migrate creates or updates the ADK session tables on the MySQL database
-// pointed to by dsn. It is idempotent (GORM AutoMigrate) and is invoked by
-// cmd/migrate from the ArgoCD PreSync Job before the pods roll out.
+// llmUsageSchema records one Gemini call's token usage and estimated cost
+// (see internal/llmusage), so the daily cost-report batch can aggregate it.
+// Unlike the ADK's own tables above, this one is owned by this project, not
+// mirrored from upstream.
+type llmUsageSchema struct {
+	ID        uint      `gorm:"primaryKey;autoIncrement"`
+	Timestamp time.Time `gorm:"type:datetime(6);precision:6;index"`
+	Model     string    `gorm:"index"`
+	Trigger   string    `gorm:"index"`
+
+	AppName      string
+	UserID       string
+	SessionID    string
+	InvocationID string
+
+	PromptTokens        int32
+	CandidatesTokens    int32
+	CachedTokens        int32
+	ThoughtsTokens      int32
+	ToolUsePromptTokens int32
+	TotalTokens         int32
+
+	EstimatedCostUSD float64
+}
+
+func (llmUsageSchema) TableName() string { return "llm_usages" }
+
+// Migrate creates or updates the ADK session tables and this project's own
+// llm_usages table on the MySQL database pointed to by dsn. It is idempotent
+// (GORM AutoMigrate) and is invoked by cmd/migrate from the ArgoCD PreSync
+// Job before the pods roll out.
 func Migrate(dsn string) error {
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {
@@ -104,6 +132,7 @@ func Migrate(dsn string) error {
 		&eventSchema{},
 		&appStateSchema{},
 		&userStateSchema{},
+		&llmUsageSchema{},
 	); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
 	}
