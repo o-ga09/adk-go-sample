@@ -273,7 +273,7 @@ func (l *Listener) respond(ctx context.Context, msg incomingMessage, text string
 		reply = fmt.Sprintf("エラーが発生しました: %v", err)
 	}
 	if reply == "" {
-		return // summary already delivered into the thread by slack_push
+		return // already delivered into the thread by a delivery tool (see isDeliveryTool)
 	}
 	l.reply(ctx, msg, reply)
 }
@@ -329,7 +329,7 @@ func (l *Listener) ask(ctx context.Context, msg incomingMessage, text string) (s
 				}
 				if p.FunctionResponse != nil {
 					log.Printf("slackbot: [%s] tool-response: %s %s", ev.Author, p.FunctionResponse.Name, compactJSON(p.FunctionResponse.Response))
-					if p.FunctionResponse.Name == notifytools.ToolNameSlackPush {
+					if isDeliveryTool(p.FunctionResponse.Name) {
 						if s, _ := p.FunctionResponse.Response["status"].(string); s == notifytools.StatusSlackPushSent {
 							summaryPosted = true
 						}
@@ -339,16 +339,32 @@ func (l *Listener) ask(ctx context.Context, msg incomingMessage, text string) (s
 		}
 	}
 	if lastText == "" {
-		// For the mail-triage task the agent delivers its summary itself via
-		// slack_push (into this same thread) and may end its turn without any
-		// final text; replying "(応答がありませんでした)" on top of the summary
-		// reads like a failure. Only fall back when nothing was delivered.
+		// For the mail-triage and calendar-digest tasks the agent delivers its
+		// reply itself via a delivery tool (see isDeliveryTool, into this same
+		// thread) and may end its turn without any final text; replying
+		// "(応答がありませんでした)" on top of that reads like a failure. Only
+		// fall back when nothing was delivered.
 		if summaryPosted {
 			return "", nil
 		}
 		lastText = "(応答がありませんでした)"
 	}
 	return lastText, nil
+}
+
+// deliveryToolNames are the notify tools that post directly into the
+// requesting Slack thread/channel themselves (slack_push for mail triage,
+// calendar_digest_push for #14's calendar query/digest), as opposed to
+// answering via the agent's final response text. ask() must not follow one of
+// these with a "(応答がありませんでした)" fallback reply.
+var deliveryToolNames = map[string]bool{
+	notifytools.ToolNameSlackPush:          true,
+	notifytools.ToolNameCalendarDigestPush: true,
+}
+
+// isDeliveryTool reports whether name is one of deliveryToolNames.
+func isDeliveryTool(name string) bool {
+	return deliveryToolNames[name]
 }
 
 // compactJSON renders a tool's response map for the pod log so failures

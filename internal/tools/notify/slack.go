@@ -27,9 +27,14 @@ const maxMessageLen = 39000
 // StatusSlackPushSent is its result status for a delivered message.
 // internal/slackbot watches tool responses for this name/status pair to know
 // whether the summary was already delivered into the requesting thread.
+//
+// ToolNameCalendarDigestPush is the registered name of the calendar-digest
+// notification tool (#14); it shares StatusSlackPushSent's "sent" value, so
+// internal/slackbot's same delivered-check covers both tools.
 const (
-	ToolNameSlackPush   = "slack_push"
-	StatusSlackPushSent = "sent"
+	ToolNameSlackPush          = "slack_push"
+	ToolNameCalendarDigestPush = "calendar_digest_push"
+	StatusSlackPushSent        = "sent"
 )
 
 // Session-state keys under which internal/slackbot records where the
@@ -54,7 +59,19 @@ func SlackTools(c *config.Config) ([]tool.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []tool.Tool{pushTool}, nil
+
+	digestTool, err := functiontool.New(functiontool.Config{
+		Name: ToolNameCalendarDigestPush,
+		Description: "カレンダーの予定一覧をSlackへ通知する(予定確認への回答・朝のダイジェスト共通)。" +
+			"calendar_list_eventsで取得した予定の一覧(タイトル・htmlLink・表示用日時)を渡すと、" +
+			"このツールが日本語のメッセージに整形してSlackへ投稿する。予定が0件でもそのまま呼び出すこと" +
+			"(「本日の予定はありません」等として届く)。一連の処理の最後に1回だけ呼び出すこと。",
+	}, calendarDigestPush(c))
+	if err != nil {
+		return nil, err
+	}
+
+	return []tool.Tool{pushTool, digestTool}, nil
 }
 
 // needsReviewItem is a mail the agent judged the user should review.
@@ -105,6 +122,42 @@ func slackPush(c *config.Config) functiontool.Func[slackPushInput, slackPushResu
 			return slackPushResult{Status: "error", Error: err.Error()}
 		}
 		return slackPushResult{Status: StatusSlackPushSent}
+	}
+}
+
+// calendarDigestInput carries the events calendar_list_events returned.
+// Events must carry `omitempty`: a zero-event day is the common case, and a
+// nil slice without it would fail the inferred-schema validation. See
+// .claude/rules/tool-json-schema.md.
+type calendarDigestInput struct {
+	Events []eventItem `json:"events,omitempty"`
+	Note   string      `json:"note,omitempty"`
+}
+
+type calendarDigestResult struct {
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+func calendarDigestPush(c *config.Config) functiontool.Func[calendarDigestInput, calendarDigestResult] {
+	client := slack.New(c.SlackBotToken)
+	return func(ctx tool.Context, in calendarDigestInput) calendarDigestResult {
+		channel, threadTS := requestOrigin(ctx)
+		if channel == "" {
+			channel = c.SlackChannelID
+		}
+		if c.SlackBotToken == "" || channel == "" {
+			log.Print("calendar digest notify skipped: not configured")
+			return calendarDigestResult{Status: "skipped", Error: "Slack not configured"}
+		}
+		opts := []slack.MsgOption{slack.MsgOptionText(formatDigest(in), false)}
+		if threadTS != "" {
+			opts = append(opts, slack.MsgOptionTS(threadTS))
+		}
+		if _, _, err := client.PostMessageContext(ctx, channel, opts...); err != nil {
+			return calendarDigestResult{Status: "error", Error: err.Error()}
+		}
+		return calendarDigestResult{Status: StatusSlackPushSent}
 	}
 }
 
@@ -171,6 +224,40 @@ func formatSummary(in slackPushInput) string {
 	}
 
 	return truncate(strings.TrimRight(b.String(), "\n"), maxMessageLen)
+}
+
+// formatDigest renders in as the Japanese Slack mrkdwn calendar digest
+// message, e.g.:
+//
+//	:calendar: 本日の予定
+//	・<HTMLLINK|定例MTG> (7/12 10:00)
+//
+// or, with zero events:
+//
+//	:calendar: 本日の予定はありません
+func formatDigest(in calendarDigestInput) string {
+	var b strings.Builder
+	if len(in.Events) == 0 {
+		b.WriteString(":calendar: 本日の予定はありません")
+	} else {
+		b.WriteString(":calendar: 本日の予定\n")
+		for i, e := range in.Events {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			title := escapeMrkdwn(subjectOrPlaceholder(e.Title))
+			when := escapeMrkdwn(e.When)
+			if e.HTMLLink == "" {
+				fmt.Fprintf(&b, "・%s (%s)", title, when)
+				continue
+			}
+			fmt.Fprintf(&b, "・<%s|%s> (%s)", e.HTMLLink, title, when)
+		}
+	}
+	if in.Note != "" {
+		fmt.Fprintf(&b, "\n\n備考: %s", escapeMrkdwn(in.Note))
+	}
+	return truncate(b.String(), maxMessageLen)
 }
 
 // subjectOrPlaceholder returns s, or a placeholder if s is empty, for display

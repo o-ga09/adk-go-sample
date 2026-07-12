@@ -2,9 +2,10 @@
 // inbox mail, labels unwanted mail, registers calendar events, and notifies
 // the user over Slack (via the Slack Bot Token / chat.postMessage API). It
 // also fetches, summarizes, and translates Go blog posts when asked to,
-// either by URL or by listing recent posts when no URL is given, and manages
-// GTD tasks (capture/clarify/organize/review/engage) — all typically invoked
-// via the Slack @mention listener.
+// either by URL or by listing recent posts when no URL is given, manages GTD
+// tasks (capture/clarify/organize/review/engage), and answers calendar
+// queries / posts a calendar digest to Slack — all typically invoked via the
+// Slack @mention listener.
 package gmailagent
 
 import (
@@ -28,10 +29,11 @@ import (
 // Instruction guides the agent. The {gmail_query} / {action_mode} placeholders
 // are resolved from session state at runtime by ADK.
 //
-// The agent is invoked both by the cron batch (always the fixed "受信トレイを
-// 整理して通知してください" request) and, since the Slack integration, by
-// arbitrary @mention text from the user. The instruction therefore routes
-// between four tasks based on what the message actually asks for.
+// The agent is invoked both by the cron batch (the fixed "受信トレイを整理して
+// 通知してください" request, or since #14 "今日の予定一覧をSlackに通知して
+// ください") and, since the Slack integration, by arbitrary @mention text from
+// the user. The instruction therefore routes between five tasks based on what
+// the message actually asks for.
 const instructionTmpl = `あなたはユーザー専用の秘書エージェントです。依頼内容に応じて、以下のいずれか一つの業務だけを行ってください。
 
 # 業務A: 受信メールの整理・通知(「受信トレイを整理して」等、メール整理の依頼のとき)
@@ -90,9 +92,19 @@ Slackスレッドに投稿される)
 5. 完了: 「○○を完了/終わった」等には、対象タスクの id を(直前のやり取りやtask_listの結果から)特定し
    task_complete を呼ぶ。idが特定できない場合は、task_list の結果を示してどれか尋ねる。
 
+# 業務E: 予定の確認・通知(「今日の予定は？」等の照会、または「今日の予定一覧をSlackに通知して」等の
+朝のダイジェスト依頼のとき。読み取り専用の業務のため動作モードに関わらず常に実行してよい)
+1. calendar_list_events を呼ぶ。期間の指定がなければ timeMinRFC3339/timeMaxRFC3339 は省略してよい
+   (省略時は本日(JST)の予定になる)。指定があれば(「明日」「来週」等)対応する範囲を渡す。
+2. calendar_digest_push を1回だけ呼び、取得した予定をそのまま events 引数に渡す(title は各予定の
+   summary、when は表示用の日時、htmlLinkは戻り値のものを使う)。予定が0件でもそのまま呼び出すこと
+   (「本日の予定はありません」として届く)。
+
 # 注意
 - 業務A・業務Dの現在の動作モード: %s。dry_run の場合、ツールは実際の変更を行わずログのみ返すが、手順は同じように実行すること。
-- ツールがエラーを返したら、業務Aでは slack_push の note 引数に、業務B・C・Dでは返信にその旨を含める。無限ループを避け、各メール・各記事・各タスク操作の処理は一度だけにする。
+- ツールがエラーを返したら、業務Aでは slack_push の note 引数に、業務Eでは calendar_digest_push の
+  note 引数に、業務B・C・Dでは返信にその旨を含める。無限ループを避け、各メール・各記事・各タスク・
+  各予定確認の処理は一度だけにする。
 - どの業務にも当てはまらない依頼の場合は、対応できない旨を日本語で伝える。`
 
 // Config carries the dependencies needed to build the agent.
@@ -140,7 +152,7 @@ func New(ctx context.Context, cfg Config) (agent.Agent, error) {
 	return llmagent.New(llmagent.Config{
 		Name:        cfg.App.AppName,
 		Model:       cfg.Model,
-		Description: "受信メールを整理(分類・ラベル付け)し、予定をカレンダー登録し、要約をSlack通知する秘書エージェント。Go blogのURLを渡すと要約・翻訳も行い、URLがなくても最近の記事一覧・要約に対応する。GTDタスクの登録・整理・一覧・完了も行う。",
+		Description: "受信メールを整理(分類・ラベル付け)し、予定をカレンダー登録し、要約をSlack通知する秘書エージェント。Go blogのURLを渡すと要約・翻訳も行い、URLがなくても最近の記事一覧・要約に対応する。GTDタスクの登録・整理・一覧・完了も行う。カレンダーの予定確認・朝のダイジェスト通知にも対応する。",
 		Instruction: instruction,
 		Tools:       allTools,
 	})
