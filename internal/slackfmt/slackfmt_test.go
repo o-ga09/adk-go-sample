@@ -236,6 +236,26 @@ func TestLimit_OverMaxTrimsAndNotes(t *testing.T) {
 	_ = last
 }
 
+func TestFormatDateTime(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "秒とオフセットを落として分単位にする", in: "2026-05-21T09:30:45+09:00", want: "2026-05-21 09:30"},
+		{name: "UTCオフセットでも同様", in: "2026-05-21T00:00:00+00:00", want: "2026-05-21 00:00"},
+		{name: "空文字は空文字のまま", in: "", want: ""},
+		{name: "RFC3339でない値はそのまま返す(サイレントに握りつぶさない)", in: "2026-05-21", want: "2026-05-21"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := FormatDateTime(tt.in); got != tt.want {
+				t.Errorf("FormatDateTime(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestColoredAttachment(t *testing.T) {
 	got := ColoredAttachment("danger", Divider(), Divider())
 	if got.Color != "danger" {

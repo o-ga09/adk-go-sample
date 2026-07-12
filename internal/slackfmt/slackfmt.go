@@ -10,6 +10,7 @@ package slackfmt
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/slack-go/slack"
@@ -121,6 +122,24 @@ func Limit(blocks []slack.Block) []slack.Block {
 // alongside Block Kit.
 func ColoredAttachment(color string, blocks ...slack.Block) slack.Attachment {
 	return slack.Attachment{Color: color, Blocks: slack.Blocks{BlockSet: blocks}}
+}
+
+// FormatDateTime formats an RFC3339 timestamp for display with minute
+// precision, dropping seconds and the raw offset suffix (e.g.
+// "2026-05-21T09:00:00+09:00" becomes "2026-05-21 09:00"). Tool code should
+// call this when rendering a timestamp a tool returned, rather than asking
+// the LLM to reformat it in its reply text. If s is empty or not a valid
+// RFC3339 timestamp, it is returned unchanged so a malformed value is still
+// visible rather than silently dropped.
+func FormatDateTime(s string) string {
+	if s == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return s
+	}
+	return t.Format("2006-01-02 15:04")
 }
 
 // truncate returns the prefix of s that is at most max bytes long, backing

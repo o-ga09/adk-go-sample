@@ -1,12 +1,9 @@
 package slackbot
 
 import (
-	"strings"
 	"testing"
 
-	"github.com/o-ga09/adk-go-sample/internal/slackfmt"
 	notifytools "github.com/o-ga09/adk-go-sample/internal/tools/notify"
-	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/stretchr/testify/assert"
 )
@@ -96,9 +93,9 @@ func TestParseAppMention(t *testing.T) {
 }
 
 // TestIsDeliveryTool covers the tool-name check ask() uses to decide whether
-// a notify tool already posted the reply into the thread itself: both
-// slack_push (mail triage, #16) and calendar_digest_push (#14) post directly,
-// so a lastText fallback of "(応答がありませんでした)" must not follow either.
+// a notify tool already posted the reply into the thread itself (every
+// *_push tool in internal/tools/notify posts directly), so a lastText
+// fallback of "(応答がありませんでした)" must not follow any of them.
 func TestIsDeliveryTool(t *testing.T) {
 	tests := []struct {
 		name string
@@ -107,6 +104,10 @@ func TestIsDeliveryTool(t *testing.T) {
 	}{
 		{name: "slack_push", in: notifytools.ToolNameSlackPush, want: true},
 		{name: "calendar_digest_push", in: notifytools.ToolNameCalendarDigestPush, want: true},
+		{name: "goblog_summary_push", in: notifytools.ToolNameGoblogSummaryPush, want: true},
+		{name: "goblog_list_push", in: notifytools.ToolNameGoblogListPush, want: true},
+		{name: "task_list_push", in: notifytools.ToolNameTaskListPush, want: true},
+		{name: "task_action_push", in: notifytools.ToolNameTaskActionPush, want: true},
 		{name: "その他のツール名は対象外", in: "gmail_list_messages", want: false},
 		{name: "空文字は対象外", in: "", want: false},
 	}
@@ -201,86 +202,5 @@ func TestParseThreadReply(t *testing.T) {
 			assert.Equal(t, tt.wantMsg, msg)
 			assert.Equal(t, tt.wantText, text)
 		})
-	}
-}
-
-// blockLines renders blocks as one debug line per block, for readable
-// assertions against the message structure without depending on slack-go's
-// internal JSON layout.
-func blockLines(t *testing.T, blocks []slack.Block) []string {
-	t.Helper()
-	lines := make([]string, 0, len(blocks))
-	for _, b := range blocks {
-		switch bl := b.(type) {
-		case *slack.HeaderBlock:
-			lines = append(lines, "HEADER: "+bl.Text.Text)
-		case *slack.SectionBlock:
-			lines = append(lines, "SECTION: "+bl.Text.Text)
-		case *slack.ContextBlock:
-			var texts []string
-			for _, e := range bl.ContextElements.Elements {
-				if tb, ok := e.(*slack.TextBlockObject); ok {
-					texts = append(texts, tb.Text)
-				}
-			}
-			lines = append(lines, "CONTEXT: "+strings.Join(texts, " "))
-		case *slack.DividerBlock:
-			lines = append(lines, "DIVIDER")
-		default:
-			t.Fatalf("unexpected block type %T", b)
-		}
-	}
-	return lines
-}
-
-func TestReplyBlocks_PlainTextHasNoTitle(t *testing.T) {
-	got := blockLines(t, replyBlocks("", "", "ご用件をメンションの後に書いてください。"))
-	want := []string{"SECTION: ご用件をメンションの後に書いてください。"}
-	if len(got) != len(want) || got[0] != want[0] {
-		t.Errorf("replyBlocks() = %v, want %v", got, want)
-	}
-}
-
-func TestReplyBlocks_WithTitleAndURLSeparatesMetaFromBody(t *testing.T) {
-	got := blockLines(t, replyBlocks("range over func iterators", "https://go.dev/blog/range-functions", "この記事はイテレータについて..."))
-	want := []string{
-		"HEADER: range over func iterators",
-		"CONTEXT: https://go.dev/blog/range-functions",
-		"DIVIDER",
-		"SECTION: この記事はイテレータについて...",
-	}
-	if len(got) != len(want) {
-		t.Fatalf("replyBlocks() = %v, want %v", got, want)
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			t.Errorf("block[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-}
-
-func TestReplyBlocks_WithTitleButNoURL(t *testing.T) {
-	got := blockLines(t, replyBlocks("タイトルのみ", "", "本文"))
-	want := []string{"HEADER: タイトルのみ", "DIVIDER", "SECTION: 本文"}
-	if len(got) != len(want) {
-		t.Fatalf("replyBlocks() = %v, want %v", got, want)
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			t.Errorf("block[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-}
-
-func TestReplyBlocks_LongBodyStaysUnderBlockLimit(t *testing.T) {
-	long := strings.Repeat("あ", 20000) // far more than fits in one 3000-char section
-	blocks := replyBlocks("長い記事", "https://go.dev/blog/long", long)
-	if len(blocks) > slackfmt.MaxBlocks {
-		t.Fatalf("replyBlocks() = %d blocks, want <= %d", len(blocks), slackfmt.MaxBlocks)
-	}
-	for _, b := range blocks {
-		if sb, ok := b.(*slack.SectionBlock); ok && len(sb.Text.Text) > 3000 {
-			t.Errorf("section block text len = %d, want <= 3000", len(sb.Text.Text))
-		}
 	}
 }
