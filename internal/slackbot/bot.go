@@ -5,7 +5,10 @@
 // the same agent used by cmd/batch and the ADK REST API, and the agent's
 // final reply is posted back in the same Slack thread. Once a thread has
 // been started this way, plain messages in that thread (no @mention needed)
-// keep talking to the same agent session too.
+// keep talking to the same agent session too. While a request is being
+// handled, the triggering message gets an :eyes: reaction, swapped for
+// :white_check_mark: (success) or :x: (failure) when the run finishes
+// (requires the reactions:write bot scope; best-effort otherwise).
 package slackbot
 
 import (
@@ -41,6 +44,17 @@ type Config struct {
 // mentionRE strips a leading "<@U12345> " Slack mention token from a message,
 // so the agent only sees the text the user actually typed after the mention.
 var mentionRE = regexp.MustCompile(`^\s*<@[A-Z0-9]+>\s*`)
+
+// Reaction emoji the listener puts on the triggering Slack message to show
+// request progress: :eyes: while the agent is working, swapped for
+// :white_check_mark: on success or :x: on failure. Posting them needs the
+// reactions:write bot scope; without it the reaction calls only log an error
+// and the reply itself still goes out.
+const (
+	reactionWorking = "eyes"
+	reactionDone    = "white_check_mark"
+	reactionFailed  = "x"
+)
 
 // Listener holds the running Slack Socket Mode connection and its ADK runner.
 type Listener struct {
@@ -200,26 +214,39 @@ func (l *Listener) handleAppMention(ctx context.Context, outer slackevents.Event
 }
 
 // parseThreadReply normalizes a plain "message" event into an incomingMessage
-// plus its text, or reports ok=false when the event should be ignored:
-// bot-authored messages (BotID set, e.g. this bot's own replies echoed back),
-// any non-empty SubType (edits, deletes, channel-join notices, ...), messages
-// that aren't a reply within a thread, a thread's own root message, a message
-// that also mentions this bot (Slack delivers that as a separate app_mention
-// event, which is handled by handleAppMention instead — treating it here too
-// would run the agent twice for one Slack message), and blank text.
-func parseThreadReply(ev *slackevents.MessageEvent, botUserID string) (msg incomingMessage, text string, ok bool) {
-	if ev == nil || ev.BotID != "" || ev.SubType != "" {
-		return incomingMessage{}, "", false
+// plus its text. A non-empty ignore return means the event should not be
+// handled and says why (so handleThreadReply can log it — a message event
+// being silently dropped is otherwise indistinguishable from Slack never
+// delivering one, which made the missing message.channels subscription on
+// 2026-07-12 hard to diagnose): bot-authored messages (BotID set, e.g. this
+// bot's own replies echoed back), any non-empty SubType (edits, deletes,
+// channel-join notices, ...), messages that aren't a reply within a thread, a
+// thread's own root message, a message that also mentions this bot (Slack
+// delivers that as a separate app_mention event, which is handled by
+// handleAppMention instead — treating it here too would run the agent twice
+// for one Slack message), and blank text.
+func parseThreadReply(ev *slackevents.MessageEvent, botUserID string) (msg incomingMessage, text string, ignore string) {
+	if ev == nil {
+		return incomingMessage{}, "", "nil event"
 	}
-	if ev.ThreadTimeStamp == "" || ev.ThreadTimeStamp == ev.TimeStamp {
-		return incomingMessage{}, "", false
+	if ev.BotID != "" {
+		return incomingMessage{}, "", "bot message"
+	}
+	if ev.SubType != "" {
+		return incomingMessage{}, "", "subtype " + ev.SubType
+	}
+	if ev.ThreadTimeStamp == "" {
+		return incomingMessage{}, "", "not a thread reply"
+	}
+	if ev.ThreadTimeStamp == ev.TimeStamp {
+		return incomingMessage{}, "", "thread root message"
 	}
 	if botUserID != "" && strings.Contains(ev.Text, "<@"+botUserID+">") {
-		return incomingMessage{}, "", false
+		return incomingMessage{}, "", "re-mention, deferred to app_mention"
 	}
 	text = strings.TrimSpace(ev.Text)
 	if text == "" {
-		return incomingMessage{}, "", false
+		return incomingMessage{}, "", "empty text"
 	}
 	msg = incomingMessage{
 		Channel:         ev.Channel,
@@ -227,7 +254,7 @@ func parseThreadReply(ev *slackevents.MessageEvent, botUserID string) (msg incom
 		TimeStamp:       ev.TimeStamp,
 		ThreadTimeStamp: ev.ThreadTimeStamp,
 	}
-	return msg, text, true
+	return msg, text, ""
 }
 
 // handleThreadReply lets a user keep talking to the agent in a thread
@@ -240,17 +267,25 @@ func (l *Listener) handleThreadReply(ctx context.Context, outer slackevents.Even
 	if !ok {
 		return
 	}
-	msg, text, ok := parseThreadReply(ev, l.botUserID)
-	if !ok {
+	msg, text, ignore := parseThreadReply(ev, l.botUserID)
+	if ignore != "" {
+		if ev != nil {
+			log.Printf("slackbot: ignoring message event (%s) channel=%s ts=%s", ignore, ev.Channel, ev.TimeStamp)
+		}
 		return
 	}
 
 	if l.app.SlackAllowedUserID != "" && msg.User != l.app.SlackAllowedUserID {
-		return // stay silent for other users rather than replying into a thread they may not own
+		// Stay silent for other users rather than replying into a thread they
+		// may not own.
+		log.Printf("slackbot: ignoring thread reply (disallowed user %s) channel=%s ts=%s", msg.User, msg.Channel, msg.TimeStamp)
+		return
 	}
 
 	if !l.hasSession(ctx, msg) {
-		return // this thread was never started with an @mention; don't self-invite
+		// This thread was never started with an @mention; don't self-invite.
+		log.Printf("slackbot: ignoring thread reply (no session for thread %s) channel=%s ts=%s", msg.threadKey(), msg.Channel, msg.TimeStamp)
+		return
 	}
 
 	l.respond(ctx, msg, text)
@@ -268,17 +303,41 @@ func (l *Listener) hasSession(ctx context.Context, msg incomingMessage) bool {
 }
 
 // respond runs the agent on text and posts its reply (if any) back into
-// msg's thread.
+// msg's thread, marking progress with reactions on the triggering message.
 func (l *Listener) respond(ctx context.Context, msg incomingMessage, text string) {
+	item := slack.NewRefToMessage(msg.Channel, msg.TimeStamp)
+	l.addReaction(ctx, item, reactionWorking)
+
 	blocks, err := l.ask(ctx, msg, text)
 	if err != nil {
 		log.Printf("slackbot: agent run failed: %v", err)
-		blocks = slackfmt.Sections(fmt.Sprintf("エラーが発生しました: %v", err))
+		l.swapReaction(ctx, item, reactionWorking, reactionFailed)
+		l.reply(ctx, msg, slackfmt.Sections(fmt.Sprintf("エラーが発生しました: %v", err)))
+		return
 	}
+	l.swapReaction(ctx, item, reactionWorking, reactionDone)
 	if blocks == nil {
 		return // already delivered into the thread by a delivery tool (see isDeliveryTool)
 	}
 	l.reply(ctx, msg, blocks)
+}
+
+// addReaction best-effort adds the emoji named name to item. Reaction
+// failures (missing reactions:write scope, already_reacted, ...) must never
+// fail the request itself, so they are only logged.
+func (l *Listener) addReaction(ctx context.Context, item slack.ItemRef, name string) {
+	if err := l.api.AddReactionContext(ctx, name, item); err != nil {
+		log.Printf("slackbot: add reaction :%s: failed: %v", name, err)
+	}
+}
+
+// swapReaction replaces the in-progress reaction on item with the outcome
+// one, with the same best-effort semantics as addReaction.
+func (l *Listener) swapReaction(ctx context.Context, item slack.ItemRef, old, next string) {
+	if err := l.api.RemoveReactionContext(ctx, old, item); err != nil {
+		log.Printf("slackbot: remove reaction :%s: failed: %v", old, err)
+	}
+	l.addReaction(ctx, item, next)
 }
 
 // ask runs the agent with text as the user's message, reusing one ADK
