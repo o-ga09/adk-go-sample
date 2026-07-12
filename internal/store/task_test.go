@@ -156,6 +156,39 @@ func TestTaskStore_UpdateUnknownIDReturnsErrTaskNotFound(t *testing.T) {
 	}
 }
 
+func TestSortByPriority(t *testing.T) {
+	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	dueSoon := base.AddDate(0, 0, 1)
+	dueLater := base.AddDate(0, 0, 10)
+	overdue := base.AddDate(0, 0, -1)
+
+	noDueOld := Task{ID: "no-due-old", CreateTime: base}
+	noDueNew := Task{ID: "no-due-new", CreateTime: base.AddDate(0, 0, 1)}
+	dueLaterTask := Task{ID: "due-later", Due: &dueLater, CreateTime: base}
+	dueSoonTask := Task{ID: "due-soon", Due: &dueSoon, CreateTime: base}
+	overdueTask := Task{ID: "overdue", Due: &overdue, CreateTime: base}
+
+	got := SortByPriority([]Task{noDueNew, dueLaterTask, noDueOld, dueSoonTask, overdueTask})
+
+	want := []string{"overdue", "due-soon", "due-later", "no-due-old", "no-due-new"}
+	if len(got) != len(want) {
+		t.Fatalf("SortByPriority returned %d tasks, want %d", len(got), len(want))
+	}
+	for i, id := range want {
+		if got[i].ID != id {
+			t.Errorf("position %d = %q, want %q (order: %v)", i, got[i].ID, id, taskIDs(got))
+		}
+	}
+}
+
+func taskIDs(tasks []Task) []string {
+	ids := make([]string, len(tasks))
+	for i, t := range tasks {
+		ids[i] = t.ID
+	}
+	return ids
+}
+
 func TestTaskStore_CompleteSetsStatusDone(t *testing.T) {
 	ctx := context.Background()
 	st := newTestTaskStore(t)

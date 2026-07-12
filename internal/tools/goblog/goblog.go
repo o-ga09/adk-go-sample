@@ -26,11 +26,19 @@ const allowedHost = "go.dev"
 // maxContentLen bounds how much article text is returned to the agent.
 const maxContentLen = 40000
 
+// ToolNameFetchPost is the registered name of the goblog_fetch_post tool.
+// internal/slackbot watches tool calls/responses for this name to recover a
+// fetched article's title/URL for its own reply formatting.
+const ToolNameFetchPost = "goblog_fetch_post"
+
+// StatusSuccess is fetchResult.Status's value for a successful fetch.
+const StatusSuccess = "success"
+
 // Tools returns the go blog tools: fetching a single post by URL, and
 // listing recent posts from the blog's Atom feed.
 func Tools() ([]tool.Tool, error) {
 	fetchTool, err := functiontool.New(functiontool.Config{
-		Name:        "goblog_fetch_post",
+		Name:        ToolNameFetchPost,
 		Description: "Fetch a Go blog post from https://go.dev/blog/... and return its title and plain-text content, for the caller to summarize and/or translate. Read-only; only go.dev URLs are allowed.",
 	}, fetchPost())
 	if err != nil {
@@ -63,7 +71,7 @@ func fetchPost() functiontool.Func[fetchInput, fetchResult] {
 		if err != nil {
 			return fetchResult{Status: "error", Error: err.Error()}
 		}
-		return fetchResult{Title: title, Content: content, Status: "success"}
+		return fetchResult{Title: title, Content: content, Status: StatusSuccess}
 	}
 }
 
@@ -75,7 +83,7 @@ func fetch(ctx context.Context, rawURL string) (title, content string, err error
 	if err != nil {
 		return "", "", err
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 	return parseArticle(body)
 }
 
@@ -98,7 +106,7 @@ func httpGet(ctx context.Context, rawURL string) (io.ReadCloser, error) {
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("fetch %s: unexpected status %d", u, resp.StatusCode)
 	}
 	return resp.Body, nil

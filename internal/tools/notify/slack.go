@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/o-ga09/adk-go-sample/internal/config"
+	"github.com/o-ga09/adk-go-sample/internal/slackfmt"
 	"github.com/slack-go/slack"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
@@ -19,9 +19,11 @@ import (
 // in the Gmail web UI.
 const gmailMessageLinkPrefix = "https://mail.google.com/mail/u/0/#all/"
 
-// maxMessageLen bounds the formatted Slack message length (Slack's own limit
-// is ~40,000 characters for a single message).
-const maxMessageLen = 39000
+// maxListItems bounds how many needsReview/events entries are individually
+// listed in the summary message, so a very large batch can't blow past
+// Slack's per-message block/character limits (see .claude/rules and
+// slackfmt.Limit, applied as a final safety net regardless).
+const maxListItems = 20
 
 // ToolNameSlackPush is the registered name of the notification tool, and
 // StatusSlackPushSent is its result status for a delivered message.
@@ -114,7 +116,7 @@ func slackPush(c *config.Config) functiontool.Func[slackPushInput, slackPushResu
 			log.Print("slack notify skipped: not configured")
 			return slackPushResult{Status: "skipped", Error: "Slack not configured"}
 		}
-		opts := []slack.MsgOption{slack.MsgOptionText(formatSummary(in), false)}
+		opts := []slack.MsgOption{slack.MsgOptionBlocks(summaryBlocks(in)...)}
 		if threadTS != "" {
 			opts = append(opts, slack.MsgOptionTS(threadTS))
 		}
@@ -150,7 +152,7 @@ func calendarDigestPush(c *config.Config) functiontool.Func[calendarDigestInput,
 			log.Print("calendar digest notify skipped: not configured")
 			return calendarDigestResult{Status: "skipped", Error: "Slack not configured"}
 		}
-		opts := []slack.MsgOption{slack.MsgOptionText(formatDigest(in), false)}
+		opts := []slack.MsgOption{slack.MsgOptionBlocks(calendarDigestBlocks(in)...)}
 		if threadTS != "" {
 			opts = append(opts, slack.MsgOptionTS(threadTS))
 		}
@@ -177,87 +179,110 @@ func stateString(ctx tool.Context, key string) string {
 	return s
 }
 
-// formatSummary renders in as the Japanese Slack mrkdwn summary message,
-// e.g.:
-//
-//	:mailbox_with_mail: メール整理完了
-//	・要確認: 1件
-//	　- <https://mail.google.com/mail/u/0/#all/MSGID|セキュリティ通知>
-//	・不要(ラベル付与): 4件
-//	・カレンダー登録: 1件
-//	　- <HTMLLINK|定例MTG> (7/12 10:00)
-func formatSummary(in slackPushInput) string {
-	var b strings.Builder
-	b.WriteString(":mailbox_with_mail: メール整理完了\n")
-
-	fmt.Fprintf(&b, "・要確認: %d件\n", len(in.NeedsReview))
-	for _, m := range in.NeedsReview {
-		subject := escapeMrkdwn(subjectOrPlaceholder(m.Subject))
-		if m.MessageID == "" {
-			// No message id to link to (shouldn't normally happen, but avoid
-			// emitting a broken "<|subject>" mrkdwn link).
-			fmt.Fprintf(&b, "　- %s\n", subject)
-			continue
-		}
-		link := gmailMessageLinkPrefix + m.MessageID
-		fmt.Fprintf(&b, "　- <%s|%s>\n", link, subject)
+// summaryBlocks renders in as a Slack Block Kit summary message: a header,
+// a fields block with the three headline counts, one section per non-empty
+// list (要確認メール / カレンダー登録, each capped at maxListItems with a
+// "…ほかN件" note so an unusually large batch can't blow past Slack's
+// per-message limits), and a context block for the free-text note.
+func summaryBlocks(in slackPushInput) []slack.Block {
+	blocks := []slack.Block{
+		slackfmt.Header(":mailbox_with_mail: メール整理完了"),
+		slackfmt.Fields(
+			"要確認", fmt.Sprintf("%d件", len(in.NeedsReview)),
+			"不要(ラベル付与)", fmt.Sprintf("%d件", in.LabeledCount),
+			"カレンダー登録", fmt.Sprintf("%d件", len(in.Events)),
+		),
 	}
 
-	fmt.Fprintf(&b, "・不要(ラベル付与): %d件\n", in.LabeledCount)
+	if len(in.NeedsReview) > 0 {
+		blocks = append(blocks, renderCappedList("要確認メール", in.NeedsReview, maxListItems, func(m needsReviewItem) string {
+			subject := slackfmt.Escape(subjectOrPlaceholder(m.Subject))
+			if m.MessageID == "" {
+				// No message id to link to (shouldn't normally happen, but avoid
+				// emitting a broken "<|subject>" mrkdwn link).
+				return "・" + subject
+			}
+			return fmt.Sprintf("・<%s%s|%s>", gmailMessageLinkPrefix, m.MessageID, subject)
+		})...)
+	}
 
-	fmt.Fprintf(&b, "・カレンダー登録: %d件\n", len(in.Events))
-	for _, e := range in.Events {
-		title := escapeMrkdwn(subjectOrPlaceholder(e.Title))
-		when := escapeMrkdwn(e.When)
-		if e.HTMLLink == "" {
-			// calendar_create_event returns no htmlLink for dry_run and
-			// already_exists results; fall back to plain text instead of an
-			// empty-URL "<|title>" mrkdwn link.
-			fmt.Fprintf(&b, "　- %s (%s)\n", title, when)
-			continue
-		}
-		fmt.Fprintf(&b, "　- <%s|%s> (%s)\n", e.HTMLLink, title, when)
+	if len(in.Events) > 0 {
+		blocks = append(blocks, renderCappedList("カレンダー登録", in.Events, maxListItems, func(e eventItem) string {
+			title := slackfmt.Escape(subjectOrPlaceholder(e.Title))
+			when := slackfmt.Escape(e.When)
+			if e.HTMLLink == "" {
+				// calendar_create_event returns no htmlLink for dry_run and
+				// already_exists results; fall back to plain text instead of an
+				// empty-URL "<|title>" mrkdwn link.
+				return fmt.Sprintf("・%s (%s)", title, when)
+			}
+			return fmt.Sprintf("・<%s|%s> (%s)", e.HTMLLink, title, when)
+		})...)
 	}
 
 	if in.Note != "" {
-		fmt.Fprintf(&b, "\n備考: %s\n", escapeMrkdwn(in.Note))
+		blocks = append(blocks, slackfmt.Context(slackfmt.Escape(in.Note)))
 	}
 
-	return truncate(strings.TrimRight(b.String(), "\n"), maxMessageLen)
+	return slackfmt.Limit(blocks)
 }
 
-// formatDigest renders in as the Japanese Slack mrkdwn calendar digest
-// message, e.g.:
-//
-//	:calendar: 本日の予定
-//	・<HTMLLINK|定例MTG> (7/12 10:00)
-//
-// or, with zero events:
-//
-//	:calendar: 本日の予定はありません
-func formatDigest(in calendarDigestInput) string {
+// renderCappedList renders heading followed by up to max items (formatted
+// one per line via line), noting how many were omitted beyond that, as one
+// or more mrkdwn section blocks. Shared by the NeedsReview and Events lists
+// in summaryBlocks, which differ only in per-item formatting.
+func renderCappedList[T any](heading string, items []T, max int, line func(T) string) []slack.Block {
+	kept, omitted := slackfmt.CapItems(items, max)
 	var b strings.Builder
+	fmt.Fprintf(&b, "*%s*\n", heading)
+	for _, it := range kept {
+		b.WriteString(line(it))
+		b.WriteString("\n")
+	}
+	if omitted > 0 {
+		fmt.Fprintf(&b, "…ほか%d件\n", omitted)
+	}
+	return slackfmt.Sections(strings.TrimRight(b.String(), "\n"))
+}
+
+// calendarDigestBlocks renders in as a Slack Block Kit calendar digest
+// message: a header (either "本日の予定" or, for zero events, "本日の予定は
+// ありません" so that case needs no body section), one capped section
+// listing the events (mirroring renderCappedList's "…ほかN件" omission note
+// for an unusually large day), and a context block for the free-text note.
+func calendarDigestBlocks(in calendarDigestInput) []slack.Block {
 	if len(in.Events) == 0 {
-		b.WriteString(":calendar: 本日の予定はありません")
-	} else {
-		b.WriteString(":calendar: 本日の予定\n")
-		for i, e := range in.Events {
-			if i > 0 {
-				b.WriteString("\n")
-			}
-			title := escapeMrkdwn(subjectOrPlaceholder(e.Title))
-			when := escapeMrkdwn(e.When)
-			if e.HTMLLink == "" {
-				fmt.Fprintf(&b, "・%s (%s)", title, when)
-				continue
-			}
-			fmt.Fprintf(&b, "・<%s|%s> (%s)", e.HTMLLink, title, when)
+		blocks := []slack.Block{slackfmt.Header(":calendar: 本日の予定はありません")}
+		if in.Note != "" {
+			blocks = append(blocks, slackfmt.Context(slackfmt.Escape(in.Note)))
 		}
+		return slackfmt.Limit(blocks)
 	}
+
+	kept, omitted := slackfmt.CapItems(in.Events, maxListItems)
+	var b strings.Builder
+	for i, e := range kept {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		title := slackfmt.Escape(subjectOrPlaceholder(e.Title))
+		when := slackfmt.Escape(e.When)
+		if e.HTMLLink == "" {
+			fmt.Fprintf(&b, "・%s (%s)", title, when)
+			continue
+		}
+		fmt.Fprintf(&b, "・<%s|%s> (%s)", e.HTMLLink, title, when)
+	}
+	if omitted > 0 {
+		fmt.Fprintf(&b, "\n…ほか%d件", omitted)
+	}
+
+	blocks := []slack.Block{slackfmt.Header(":calendar: 本日の予定")}
+	blocks = append(blocks, slackfmt.Sections(b.String())...)
 	if in.Note != "" {
-		fmt.Fprintf(&b, "\n\n備考: %s", escapeMrkdwn(in.Note))
+		blocks = append(blocks, slackfmt.Context(slackfmt.Escape(in.Note)))
 	}
-	return truncate(b.String(), maxMessageLen)
+	return slackfmt.Limit(blocks)
 }
 
 // subjectOrPlaceholder returns s, or a placeholder if s is empty, for display
@@ -267,27 +292,4 @@ func subjectOrPlaceholder(s string) string {
 		return "(件名なし)"
 	}
 	return s
-}
-
-// escapeMrkdwn escapes the characters Slack's mrkdwn format treats specially
-// in link text (& < >). It must not be applied to the raw URL half of a
-// <url|text> link.
-func escapeMrkdwn(s string) string {
-	s = strings.ReplaceAll(s, "&", "&amp;")
-	s = strings.ReplaceAll(s, "<", "&lt;")
-	s = strings.ReplaceAll(s, ">", "&gt;")
-	return s
-}
-
-// truncate returns the prefix of s that is at most max bytes long, backing
-// off to the nearest rune boundary so a multi-byte UTF-8 character (e.g.
-// Japanese text) is never split in half.
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	for max > 0 && !utf8.RuneStart(s[max]) {
-		max--
-	}
-	return s[:max]
 }

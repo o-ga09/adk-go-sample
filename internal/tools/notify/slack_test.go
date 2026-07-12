@@ -2,18 +2,57 @@ package notifytools
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/o-ga09/adk-go-sample/internal/slackfmt"
+	"github.com/slack-go/slack"
 )
 
-func TestFormatSummary(t *testing.T) {
+// blockLines renders blocks as one debug line per block, for readable
+// assertions against the message structure without depending on slack-go's
+// internal JSON layout.
+func blockLines(t *testing.T, blocks []slack.Block) []string {
+	t.Helper()
+	lines := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		switch bl := b.(type) {
+		case *slack.HeaderBlock:
+			lines = append(lines, "HEADER: "+bl.Text.Text)
+		case *slack.SectionBlock:
+			if bl.Text != nil {
+				lines = append(lines, "SECTION: "+bl.Text.Text)
+				continue
+			}
+			var fields []string
+			for _, f := range bl.Fields {
+				fields = append(fields, f.Text)
+			}
+			lines = append(lines, "FIELDS: "+strings.Join(fields, " | "))
+		case *slack.ContextBlock:
+			var texts []string
+			for _, e := range bl.ContextElements.Elements {
+				if tb, ok := e.(*slack.TextBlockObject); ok {
+					texts = append(texts, tb.Text)
+				}
+			}
+			lines = append(lines, "CONTEXT: "+strings.Join(texts, " "))
+		case *slack.DividerBlock:
+			lines = append(lines, "DIVIDER")
+		default:
+			t.Fatalf("unexpected block type %T", b)
+		}
+	}
+	return lines
+}
+
+func TestSummaryBlocks(t *testing.T) {
 	tests := []struct {
 		name string
 		in   slackPushInput
-		want string
+		want []string
 	}{
 		{
 			name: "全カテゴリあり",
@@ -27,21 +66,22 @@ func TestFormatSummary(t *testing.T) {
 					{Title: "定例MTG", HTMLLink: "https://calendar.google.com/event?eid=abc", When: "7/12 10:00"},
 				},
 			},
-			want: ":mailbox_with_mail: メール整理完了\n" +
-				"・要確認: 2件\n" +
-				"　- <https://mail.google.com/mail/u/0/#all/MSG1|セキュリティ通知>\n" +
-				"　- <https://mail.google.com/mail/u/0/#all/MSG2|(件名なし)>\n" +
-				"・不要(ラベル付与): 4件\n" +
-				"・カレンダー登録: 1件\n" +
-				"　- <https://calendar.google.com/event?eid=abc|定例MTG> (7/12 10:00)",
+			want: []string{
+				"HEADER: :mailbox_with_mail: メール整理完了",
+				"FIELDS: *要確認*\n2件 | *不要(ラベル付与)*\n4件 | *カレンダー登録*\n1件",
+				"SECTION: *要確認メール*\n" +
+					"・<https://mail.google.com/mail/u/0/#all/MSG1|セキュリティ通知>\n" +
+					"・<https://mail.google.com/mail/u/0/#all/MSG2|(件名なし)>",
+				"SECTION: *カレンダー登録*\n・<https://calendar.google.com/event?eid=abc|定例MTG> (7/12 10:00)",
+			},
 		},
 		{
-			name: "全0件",
+			name: "全0件でも表示が崩れない",
 			in:   slackPushInput{},
-			want: ":mailbox_with_mail: メール整理完了\n" +
-				"・要確認: 0件\n" +
-				"・不要(ラベル付与): 0件\n" +
-				"・カレンダー登録: 0件",
+			want: []string{
+				"HEADER: :mailbox_with_mail: メール整理完了",
+				"FIELDS: *要確認*\n0件 | *不要(ラベル付与)*\n0件 | *カレンダー登録*\n0件",
+			},
 		},
 		{
 			name: "エスケープが必要な件名",
@@ -50,48 +90,11 @@ func TestFormatSummary(t *testing.T) {
 					{Subject: "A&B <重要>", MessageID: "M1"},
 				},
 			},
-			want: ":mailbox_with_mail: メール整理完了\n" +
-				"・要確認: 1件\n" +
-				"　- <https://mail.google.com/mail/u/0/#all/M1|A&amp;B &lt;重要&gt;>\n" +
-				"・不要(ラベル付与): 0件\n" +
-				"・カレンダー登録: 0件",
-		},
-		{
-			name: "件名が空",
-			in: slackPushInput{
-				NeedsReview: []needsReviewItem{
-					{Subject: "", MessageID: "M2"},
-				},
+			want: []string{
+				"HEADER: :mailbox_with_mail: メール整理完了",
+				"FIELDS: *要確認*\n1件 | *不要(ラベル付与)*\n0件 | *カレンダー登録*\n0件",
+				"SECTION: *要確認メール*\n・<https://mail.google.com/mail/u/0/#all/M1|A&amp;B &lt;重要&gt;>",
 			},
-			want: ":mailbox_with_mail: メール整理完了\n" +
-				"・要確認: 1件\n" +
-				"　- <https://mail.google.com/mail/u/0/#all/M2|(件名なし)>\n" +
-				"・不要(ラベル付与): 0件\n" +
-				"・カレンダー登録: 0件",
-		},
-		{
-			name: "イベントのタイトルと日時のエスケープ",
-			in: slackPushInput{
-				Events: []eventItem{
-					{Title: "A&B", HTMLLink: "https://calendar.example/e1", When: "<7/12>"},
-				},
-			},
-			want: ":mailbox_with_mail: メール整理完了\n" +
-				"・要確認: 0件\n" +
-				"・不要(ラベル付与): 0件\n" +
-				"・カレンダー登録: 1件\n" +
-				"　- <https://calendar.example/e1|A&amp;B> (&lt;7/12&gt;)",
-		},
-		{
-			name: "noteあり（エスケープも適用される）",
-			in: slackPushInput{
-				Note: "テスト & <確認>",
-			},
-			want: ":mailbox_with_mail: メール整理完了\n" +
-				"・要確認: 0件\n" +
-				"・不要(ラベル付与): 0件\n" +
-				"・カレンダー登録: 0件\n" +
-				"\n備考: テスト &amp; &lt;確認&gt;",
 		},
 		{
 			name: "messageIdが空の要確認メールはリンク化しない",
@@ -100,11 +103,11 @@ func TestFormatSummary(t *testing.T) {
 					{Subject: "件名のみ", MessageID: ""},
 				},
 			},
-			want: ":mailbox_with_mail: メール整理完了\n" +
-				"・要確認: 1件\n" +
-				"　- 件名のみ\n" +
-				"・不要(ラベル付与): 0件\n" +
-				"・カレンダー登録: 0件",
+			want: []string{
+				"HEADER: :mailbox_with_mail: メール整理完了",
+				"FIELDS: *要確認*\n1件 | *不要(ラベル付与)*\n0件 | *カレンダー登録*\n0件",
+				"SECTION: *要確認メール*\n・件名のみ",
+			},
 		},
 		{
 			name: "htmlLinkが空のイベントはリンク化しない(dry_run等)",
@@ -113,56 +116,92 @@ func TestFormatSummary(t *testing.T) {
 					{Title: "定例MTG", HTMLLink: "", When: "7/12 10:00"},
 				},
 			},
-			want: ":mailbox_with_mail: メール整理完了\n" +
-				"・要確認: 0件\n" +
-				"・不要(ラベル付与): 0件\n" +
-				"・カレンダー登録: 1件\n" +
-				"　- 定例MTG (7/12 10:00)",
+			want: []string{
+				"HEADER: :mailbox_with_mail: メール整理完了",
+				"FIELDS: *要確認*\n0件 | *不要(ラベル付与)*\n0件 | *カレンダー登録*\n1件",
+				"SECTION: *カレンダー登録*\n・定例MTG (7/12 10:00)",
+			},
+		},
+		{
+			name: "イベントのタイトルと日時のエスケープ",
+			in: slackPushInput{
+				Events: []eventItem{
+					{Title: "A&B", HTMLLink: "https://calendar.example/e1", When: "<7/12>"},
+				},
+			},
+			want: []string{
+				"HEADER: :mailbox_with_mail: メール整理完了",
+				"FIELDS: *要確認*\n0件 | *不要(ラベル付与)*\n0件 | *カレンダー登録*\n1件",
+				"SECTION: *カレンダー登録*\n・<https://calendar.example/e1|A&amp;B> (&lt;7/12&gt;)",
+			},
+		},
+		{
+			name: "noteありはContext blockで注釈として分離される",
+			in: slackPushInput{
+				Note: "テスト & <確認>",
+			},
+			want: []string{
+				"HEADER: :mailbox_with_mail: メール整理完了",
+				"FIELDS: *要確認*\n0件 | *不要(ラベル付与)*\n0件 | *カレンダー登録*\n0件",
+				"CONTEXT: テスト &amp; &lt;確認&gt;",
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := formatSummary(tt.in)
-			if got != tt.want {
-				t.Errorf("formatSummary() mismatch\n got:  %q\n want: %q", got, tt.want)
+			got := blockLines(t, summaryBlocks(tt.in))
+			if len(got) != len(tt.want) {
+				t.Fatalf("summaryBlocks() = %d blocks, want %d\ngot:  %#v\nwant: %#v", len(got), len(tt.want), got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("block[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
 			}
 		})
 	}
 }
 
-func TestFormatSummary_Truncation(t *testing.T) {
-	// Build a note long enough (multi-byte throughout) that the untruncated
-	// message exceeds maxMessageLen, and that the raw maxMessageLen byte
-	// offset lands in the middle of a multi-byte rune, so a naive s[:max]
-	// byte slice (the old, buggy behavior) would produce invalid UTF-8.
-	longNote := strings.Repeat("あ", maxMessageLen)
-	in := slackPushInput{Note: longNote}
-	untruncated := ":mailbox_with_mail: メール整理完了\n" +
-		"・要確認: 0件\n" +
-		"・不要(ラベル付与): 0件\n" +
-		"・カレンダー登録: 0件\n" +
-		"\n備考: " + longNote
+// TestSummaryBlocks_CapsLargeListsAndStaysUnderLimits reproduces the "多数
+// ある場合でもblock数/文字数上限でSlack API呼び出しがエラーにならない"
+// acceptance criterion: a mailbox with far more items than fit comfortably
+// must still cap the rendered list and never exceed Slack's 50-block ceiling
+// or any individual section's character budget.
+func TestSummaryBlocks_CapsLargeListsAndStaysUnderLimits(t *testing.T) {
+	in := slackPushInput{}
+	for i := 0; i < 200; i++ {
+		in.NeedsReview = append(in.NeedsReview, needsReviewItem{
+			Subject:   fmt.Sprintf("件名%d", i),
+			MessageID: fmt.Sprintf("MSG%d", i),
+		})
+		in.Events = append(in.Events, eventItem{
+			Title:    fmt.Sprintf("イベント%d", i),
+			HTMLLink: fmt.Sprintf("https://calendar.example/%d", i),
+			When:     "7/12 10:00",
+		})
+	}
 
-	got := formatSummary(in)
+	blocks := summaryBlocks(in)
+	if len(blocks) > 50 {
+		t.Fatalf("summaryBlocks() = %d blocks, want <= 50 (Slack's per-message limit)", len(blocks))
+	}
 
-	if len(got) > maxMessageLen {
-		t.Fatalf("formatSummary() len = %d, want <= %d", len(got), maxMessageLen)
+	var sawOmissionNote bool
+	for _, b := range blocks {
+		sb, ok := b.(*slack.SectionBlock)
+		if !ok || sb.Text == nil {
+			continue
+		}
+		if len(sb.Text.Text) > 3000 {
+			t.Errorf("section block text len = %d, want <= 3000", len(sb.Text.Text))
+		}
+		if strings.Contains(sb.Text.Text, "ほか") {
+			sawOmissionNote = true
+		}
 	}
-	if !utf8.ValidString(got) {
-		t.Fatalf("formatSummary() produced invalid UTF-8: %q", got)
-	}
-	if !strings.HasPrefix(untruncated, got) {
-		t.Fatalf("formatSummary() result is not a prefix of the untruncated message")
-	}
-	// The cut must back off no further than one rune's worth of bytes from
-	// maxMessageLen, otherwise truncate is trimming more than necessary to
-	// respect a rune boundary.
-	if len(got) <= maxMessageLen-utf8.UTFMax {
-		t.Errorf("formatSummary() truncated further than a rune boundary requires: len = %d, maxMessageLen = %d", len(got), maxMessageLen)
-	}
-	if len(got) == len(untruncated) {
-		t.Fatalf("formatSummary() did not truncate at all; test input is not long enough")
+	if !sawOmissionNote {
+		t.Error("summaryBlocks() with 200 items did not note the omitted count anywhere")
 	}
 }
 
@@ -179,27 +218,6 @@ func TestSubjectOrPlaceholder(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := subjectOrPlaceholder(tt.in); got != tt.want {
 				t.Errorf("subjectOrPlaceholder(%q) = %q, want %q", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestEscapeMrkdwn(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{name: "アンパサンド", in: "A&B", want: "A&amp;B"},
-		{name: "山括弧", in: "<A>", want: "&lt;A&gt;"},
-		{name: "複合", in: "A&B <重要>", want: "A&amp;B &lt;重要&gt;"},
-		{name: "特殊文字なし", in: "テスト", want: "テスト"},
-		{name: "空文字", in: "", want: ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := escapeMrkdwn(tt.in); got != tt.want {
-				t.Errorf("escapeMrkdwn(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}
@@ -233,11 +251,11 @@ func TestSlackPushInputSchemaAllowsOmittedFields(t *testing.T) {
 	}
 }
 
-func TestFormatDigest(t *testing.T) {
+func TestCalendarDigestBlocks(t *testing.T) {
 	tests := []struct {
 		name string
 		in   calendarDigestInput
-		want string
+		want []string
 	}{
 		{
 			name: "予定が複数件ある",
@@ -247,14 +265,16 @@ func TestFormatDigest(t *testing.T) {
 					{Title: "歯医者", HTMLLink: "https://calendar.google.com/event?eid=def", When: "7/12 18:00"},
 				},
 			},
-			want: ":calendar: 本日の予定\n" +
-				"・<https://calendar.google.com/event?eid=abc|定例MTG> (7/12 10:00)\n" +
-				"・<https://calendar.google.com/event?eid=def|歯医者> (7/12 18:00)",
+			want: []string{
+				"HEADER: :calendar: 本日の予定",
+				"SECTION: ・<https://calendar.google.com/event?eid=abc|定例MTG> (7/12 10:00)\n" +
+					"・<https://calendar.google.com/event?eid=def|歯医者> (7/12 18:00)",
+			},
 		},
 		{
 			name: "予定が0件",
 			in:   calendarDigestInput{},
-			want: ":calendar: 本日の予定はありません",
+			want: []string{"HEADER: :calendar: 本日の予定はありません"},
 		},
 		{
 			name: "htmlLinkが空のイベントはリンク化しない(dry_run等)",
@@ -263,8 +283,10 @@ func TestFormatDigest(t *testing.T) {
 					{Title: "定例MTG", HTMLLink: "", When: "7/12 10:00"},
 				},
 			},
-			want: ":calendar: 本日の予定\n" +
-				"・定例MTG (7/12 10:00)",
+			want: []string{
+				"HEADER: :calendar: 本日の予定",
+				"SECTION: ・定例MTG (7/12 10:00)",
+			},
 		},
 		{
 			name: "タイトルと日時のエスケープ",
@@ -273,8 +295,10 @@ func TestFormatDigest(t *testing.T) {
 					{Title: "A&B", HTMLLink: "https://calendar.example/e1", When: "<7/12>"},
 				},
 			},
-			want: ":calendar: 本日の予定\n" +
-				"・<https://calendar.example/e1|A&amp;B> (&lt;7/12&gt;)",
+			want: []string{
+				"HEADER: :calendar: 本日の予定",
+				"SECTION: ・<https://calendar.example/e1|A&amp;B> (&lt;7/12&gt;)",
+			},
 		},
 		{
 			name: "件名が空のイベントはプレースホルダーになる",
@@ -283,26 +307,72 @@ func TestFormatDigest(t *testing.T) {
 					{Title: "", HTMLLink: "https://calendar.example/e1", When: "7/12 10:00"},
 				},
 			},
-			want: ":calendar: 本日の予定\n" +
-				"・<https://calendar.example/e1|(件名なし)> (7/12 10:00)",
+			want: []string{
+				"HEADER: :calendar: 本日の予定",
+				"SECTION: ・<https://calendar.example/e1|(件名なし)> (7/12 10:00)",
+			},
 		},
 		{
-			name: "noteあり（エスケープも適用される）",
+			name: "予定0件でもnoteはContext blockで表示される",
 			in: calendarDigestInput{
 				Note: "テスト & <確認>",
 			},
-			want: ":calendar: 本日の予定はありません\n" +
-				"\n備考: テスト &amp; &lt;確認&gt;",
+			want: []string{
+				"HEADER: :calendar: 本日の予定はありません",
+				"CONTEXT: テスト &amp; &lt;確認&gt;",
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := formatDigest(tt.in)
-			if got != tt.want {
-				t.Errorf("formatDigest() mismatch\n got:  %q\n want: %q", got, tt.want)
+			got := blockLines(t, calendarDigestBlocks(tt.in))
+			if len(got) != len(tt.want) {
+				t.Fatalf("calendarDigestBlocks() = %d blocks, want %d\ngot:  %#v\nwant: %#v", len(got), len(tt.want), got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("block[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
 			}
 		})
+	}
+}
+
+// TestCalendarDigestBlocks_CapsLargeListsAndStaysUnderLimits mirrors
+// TestSummaryBlocks_CapsLargeListsAndStaysUnderLimits for the calendar
+// digest: an unusually full day must still cap the rendered list and never
+// exceed Slack's per-message limits.
+func TestCalendarDigestBlocks_CapsLargeListsAndStaysUnderLimits(t *testing.T) {
+	in := calendarDigestInput{}
+	for i := 0; i < 200; i++ {
+		in.Events = append(in.Events, eventItem{
+			Title:    fmt.Sprintf("イベント%d", i),
+			HTMLLink: fmt.Sprintf("https://calendar.example/%d", i),
+			When:     "7/12 10:00",
+		})
+	}
+
+	blocks := calendarDigestBlocks(in)
+	if len(blocks) > 50 {
+		t.Fatalf("calendarDigestBlocks() = %d blocks, want <= 50 (Slack's per-message limit)", len(blocks))
+	}
+
+	var sawOmissionNote bool
+	for _, b := range blocks {
+		sb, ok := b.(*slack.SectionBlock)
+		if !ok || sb.Text == nil {
+			continue
+		}
+		if len(sb.Text.Text) > 3000 {
+			t.Errorf("section block text len = %d, want <= 3000", len(sb.Text.Text))
+		}
+		if strings.Contains(sb.Text.Text, "ほか") {
+			sawOmissionNote = true
+		}
+	}
+	if !sawOmissionNote {
+		t.Error("calendarDigestBlocks() with 200 events did not note the omitted count anywhere")
 	}
 }
 
@@ -330,33 +400,10 @@ func TestCalendarDigestInputSchemaAllowsOmittedFields(t *testing.T) {
 	}
 }
 
-func TestTruncate(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		max  int
-		want string
-	}{
-		{name: "上限未満はそのまま", in: "hello", max: 10, want: "hello"},
-		{name: "上限ちょうどはそのまま", in: "hello", max: 5, want: "hello"},
-		{name: "上限超過は切り詰め", in: "hello", max: 4, want: "hell"},
-		{name: "上限0で空文字を返す", in: "hello", max: 0, want: ""},
-		{name: "空文字入力", in: "", max: 5, want: ""},
-		// "こんにちは" is 5 runes of 3 bytes each (UTF-8), boundaries at
-		// byte offsets 0, 3, 6, 9, 12, 15.
-		{name: "マルチバイト: 上限がルーン境界の途中は前の境界まで戻す(1バイト目)", in: "こんにちは", max: 4, want: "こ"},
-		{name: "マルチバイト: 上限がルーン境界の途中は前の境界まで戻す(2バイト目)", in: "こんにちは", max: 5, want: "こ"},
-		{name: "マルチバイト: 上限がちょうどルーン境界ならそこまで残す", in: "こんにちは", max: 6, want: "こん"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := truncate(tt.in, tt.max)
-			if got != tt.want {
-				t.Errorf("truncate(%q, %d) = %q, want %q", tt.in, tt.max, got, tt.want)
-			}
-			if !utf8.ValidString(got) {
-				t.Errorf("truncate(%q, %d) = %q is not valid UTF-8", tt.in, tt.max, got)
-			}
-		})
+// TestEscapeIsSlackfmtEscape guards against the notify package silently
+// reintroducing its own escaping instead of reusing the shared helper.
+func TestEscapeIsSlackfmtEscape(t *testing.T) {
+	if got, want := slackfmt.Escape("A&B <x>"), "A&amp;B &lt;x&gt;"; got != want {
+		t.Errorf("slackfmt.Escape(%q) = %q, want %q", "A&B <x>", got, want)
 	}
 }

@@ -47,6 +47,7 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 | `APP_NAME` | ADK アプリ名(UI の appName) | `gmail_secretary` |
 | `LLM_PRICING_JSON` | Gemini モデル別の $/1M トークン単価をJSONで上書き。例 `{"gemini-2.5-flash":{"inputPerMillionUSD":0.3,"outputPerMillionUSD":2.5,"cachedInputPerMillionUSD":0.075}}` | "" (内蔵の `gemini-2.5-flash` 単価のみ) |
 | `LLM_COST_DAILY_ALERT_USD` | この額(USD)以上の推定コストが出た日は日次レポートに警告を付ける | `0`(警告なし) |
+| `WEEKLY_REVIEW_STALE_DAYS` | GTD週次レビューで next/waiting タスクを「停滞」とみなす未更新日数 | `14` |
 
 ## セットアップ手順
 
@@ -109,6 +110,18 @@ go run ./cmd/batch -command llm-cost-report
 ```
 
 `MYSQL_DSN` 未設定時は記録が存在しないため何もせず終了する(エラーにはしない)。本番では `-command mail` / `-command calendar-digest` と同じ ArgoWorkflows CronWorkflow 基盤に、この `-command` 違いのステップとして相乗りさせる想定(インフラリポ側の対応が必要)。
+
+## GTDタスクの週次レビュー(任意)
+
+`internal/tools/tasks` で管理している GTD タスクの状態を週次でまとめて Slack に通知する。集計するのは、未整理のまま inbox に残っているタスク数、`WEEKLY_REVIEW_STALE_DAYS` 日以上更新されていない next/waiting タスク(GTDでいう「停滞」)、そして期限・作成日時をもとに優先順位付けした「今週やるべきこと」の上位数件。
+
+```sh
+go run ./cmd/batch -command weekly-review
+```
+
+`MYSQL_DSN` 未設定時は in-memory ストアが毎回空の状態から始まり集計する意味がないため、何もせず終了する(エラーにはしない、`-command llm-cost-report` と同様)。本番では同じ ArgoWorkflows CronWorkflow 基盤に週次スケジュールの別ステップとして相乗りさせる想定(インフラリポ側の対応が必要。#16 の日次コストレポート同様、本リポジトリだけでは配線が完結しない)。
+
+なお、Slack から「今やるべきタスクは?」と聞いたときに使われる `task_list` ツールも同じ優先順位付け(期限が近い順、期限なしは作成日時が古い順)で結果を返す。
 
 ## CI/CD(本リポジトリの責務)
 

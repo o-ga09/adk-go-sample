@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/o-ga09/adk-go-sample/internal/slackfmt"
+	"github.com/slack-go/slack"
 )
 
 // Aggregate is a summed usage total for one grouping (e.g. one Trigger, over
@@ -35,6 +38,12 @@ type DailyReport struct {
 // reportedTriggers fixes the display order of FormatSlackMessage's
 // per-trigger breakdown.
 var reportedTriggers = []Trigger{TriggerBatch, TriggerSlack, TriggerAPI}
+
+// Exceeded reports whether r's total cost has reached AlertThresholdUSD
+// (always false when AlertThresholdUSD is 0, which disables the warning).
+func (r DailyReport) Exceeded() bool {
+	return r.AlertThresholdUSD > 0 && r.TotalCostUSD() >= r.AlertThresholdUSD
+}
 
 // TotalCostUSD sums EstimatedCostUSD across all triggers in the report.
 func (r DailyReport) TotalCostUSD() float64 {
@@ -91,30 +100,41 @@ func BuildDailyReport(ctx context.Context, st Store, day time.Time, alertThresho
 	}, nil
 }
 
-// FormatSlackMessage renders r as the Japanese Slack mrkdwn daily cost
-// summary.
-func FormatSlackMessage(r DailyReport) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, ":moneybag: LLM利用コスト日次レポート (%s)\n", r.Date)
-
-	if r.AlertThresholdUSD > 0 && r.TotalCostUSD() >= r.AlertThresholdUSD {
-		fmt.Fprintf(&b, ":warning: しきい値 $%.2f を超過しました\n", r.AlertThresholdUSD)
+// FormatSlackMessage renders r as a Slack Block Kit daily cost report: a
+// header, a headline warning when the threshold is exceeded, a fields block
+// with the total cost/requests/tokens, a per-trigger breakdown, month-to-date
+// cost, and a context footnote about the figures being estimates. Callers
+// (PostToSlack) additionally wrap these blocks in a colored attachment when
+// r.Exceeded() to make the overrun visually stand out.
+func FormatSlackMessage(r DailyReport) []slack.Block {
+	blocks := []slack.Block{
+		slackfmt.Header(fmt.Sprintf(":moneybag: LLM利用コスト日次レポート (%s)", r.Date)),
 	}
 
-	fmt.Fprintf(&b, "・推定コスト合計: $%.4f\n", r.TotalCostUSD())
-	fmt.Fprintf(&b, "・リクエスト数: %d件\n", r.TotalRequests())
-	fmt.Fprintf(&b, "・トークン数合計: %d\n", r.TotalTokens())
+	if r.Exceeded() {
+		blocks = append(blocks, slackfmt.Sections(fmt.Sprintf(":warning: *しきい値 $%.2f を超過しました*", r.AlertThresholdUSD))...)
+	}
 
+	blocks = append(blocks, slackfmt.Fields(
+		"推定コスト合計", fmt.Sprintf("$%.4f", r.TotalCostUSD()),
+		"リクエスト数", fmt.Sprintf("%d件", r.TotalRequests()),
+		"トークン数合計", fmt.Sprintf("%d", r.TotalTokens()),
+		"当月累計", fmt.Sprintf("$%.4f", r.MonthToDateCostUSD),
+	))
+
+	var breakdown strings.Builder
 	for _, trig := range reportedTriggers {
 		a, ok := r.ByTrigger[trig]
 		if !ok {
 			continue
 		}
-		fmt.Fprintf(&b, "　- %s: %d件 / %dトークン / $%.4f\n", trig, a.Requests, a.TotalTokens, a.EstimatedCostUSD)
+		fmt.Fprintf(&breakdown, "・%s: %d件 / %dトークン / $%.4f\n", trig, a.Requests, a.TotalTokens, a.EstimatedCostUSD)
+	}
+	if breakdown.Len() > 0 {
+		blocks = append(blocks, slackfmt.Sections(strings.TrimRight(breakdown.String(), "\n"))...)
 	}
 
-	fmt.Fprintf(&b, "・当月累計: $%.4f\n", r.MonthToDateCostUSD)
-	b.WriteString("\n※ 単価テーブルによる推定値です。実際の請求額とは異なる場合があります。")
+	blocks = append(blocks, slackfmt.Context("※ 単価テーブルによる推定値です。実際の請求額とは異なる場合があります。"))
 
-	return strings.TrimRight(b.String(), "\n")
+	return slackfmt.Limit(blocks)
 }
