@@ -8,6 +8,7 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 - 結果の要約を **Slack Bot**(`chat.postMessage`)で通知
 - Slack で bot に **@メンション**すると、その場でエージェントを呼び出せる(Socket Mode)
 - Slack で `go.dev/blog/...` の URL を渡すと、その **Go blog 記事を要約・翻訳**して返信
+- Slack で「タスク: ○○」と送ると **GTD タスク**として登録、一覧・整理・完了も Slack から操作可能。「要確認」メールは自動でタスク化(同じメールからの重複登録なし)
 - 定期実行は **ArgoWorkflows CronWorkflow**、UI は **ADK REST API**(`POST /run`, `/run_sse`)で接続
 
 ## 構成
@@ -17,11 +18,11 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
 | `cmd/api` | 常時起動の API/UI サーバ(k8s Deployment)。`ADK_LAUNCHER=prod` で headless。 |
 | `cmd/batch` | cron 用ワンショット。`runner.Run()` を1回実行して終了(Argo Job)。 |
 | `cmd/oauth` | 個人 Gmail の OAuth refresh token を取得するローカル用ヘルパ。 |
-| `internal/agents/gmail` | 秘書 LLM エージェント定義(Gmail 整理 / Go blog 要約・翻訳)。 |
-| `internal/tools/{gmail,calendar,notify,goblog}` | ADK function tools(Gmail / Calendar / Slack / Go blog 取得)。 |
+| `internal/agents/gmail` | 秘書 LLM エージェント定義(Gmail 整理 / Go blog 要約・翻訳 / GTD タスク管理)。 |
+| `internal/tools/{gmail,calendar,notify,goblog,tasks}` | ADK function tools(Gmail / Calendar / Slack / Go blog 取得 / GTD タスク)。 |
 | `internal/slackbot` | Slack Socket Mode リスナー(`@メンション`→エージェント実行→スレッド返信)。`cmd/api` 内で起動。 |
 | `internal/google` | OAuth から Gmail/Calendar クライアント生成。 |
-| `internal/store` | MySQL バックエンドの session.Service(未設定時は in-memory)。 |
+| `internal/store` | MySQL バックエンドの session.Service と GTD タスクストア(いずれも未設定時は in-memory)。 |
 | `internal/app` | 上記を組み立てる共有ビルダー。 |
 | `Dockerfile` | api / batch / oauth の3バイナリを同梱したイメージ。 |
 | `.github/workflows/build-and-deploy.yml` | ビルド→GAR push→インフラリポの image tag 書き換え。 |

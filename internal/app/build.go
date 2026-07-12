@@ -43,7 +43,12 @@ func Build(ctx context.Context, c *config.Config) (*Deps, error) {
 		return nil, fmt.Errorf("create google clients: %w", err)
 	}
 
-	ag, err := gmailagent.New(ctx, gmailagent.Config{Model: m, Clients: clients, App: c})
+	taskStore, err := store.NewTaskStore(c.MySQLDSN)
+	if err != nil {
+		return nil, fmt.Errorf("create task store: %w", err)
+	}
+
+	ag, err := gmailagent.New(ctx, gmailagent.Config{Model: m, Clients: clients, App: c, TaskStore: taskStore})
 	if err != nil {
 		return nil, fmt.Errorf("create agent: %w", err)
 	}
