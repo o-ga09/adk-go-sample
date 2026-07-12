@@ -78,10 +78,10 @@ ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一
    }'
    ```
 6. **Slack から呼び出す/通知を受け取る(任意)**: Slack App を作成し、Socket Mode を有効化。
-   - Bot Token Scopes に `app_mentions:read` / `chat:write` を追加してワークスペースにインストール → `SLACK_BOT_TOKEN`(`xoxb-`)。
+   - Bot Token Scopes に `app_mentions:read` / `chat:write` / `channels:history`(スレッド内メッセージを読むため)を追加してワークスペースにインストール → `SLACK_BOT_TOKEN`(`xoxb-`)。プライベートチャンネルや DM のスレッドでも使いたい場合は `groups:history` / `im:history` / `mpim:history` も追加する。
    - 「Socket Mode」を ON にして App-Level Token を発行(`connections:write` スコープ)→ `SLACK_APP_TOKEN`(`xapp-`)。
-   - Event Subscriptions で `app_mention` イベントを購読(Socket Mode なので Request URL の設定は不要)。
-   - `SLACK_ALLOWED_USER_ID` に自分の Slack ユーザー ID を設定しておくと、他のユーザーからのメンションを無視できる(推奨。個人のメール/カレンダーを操作できるため)。
+   - Event Subscriptions で `app_mention` と `message.channels` イベントを購読(Socket Mode なので Request URL の設定は不要)。`message.channels` を購読すると、一度 `@メンション` して開始したスレッド内では以降メンションなしでも会話を続けられる(未購読でも `app_mention` だけで動作するが、毎回メンションが必要になる)。プライベートチャンネル/DM でも使う場合は対応する `message.groups` / `message.im` / `message.mpim` も購読する。
+   - `SLACK_ALLOWED_USER_ID` に自分の Slack ユーザー ID を設定しておくと、他のユーザーからのメンション・スレッド内発言を無視できる(推奨。個人のメール/カレンダーを操作できるため)。
    - 通知サマリを投稿させたいチャンネルに Bot を **`/invite`** しておく(未招待だと `not_in_channel` エラーで投稿に失敗する)。チャンネル ID はチャンネル詳細(チャンネル名クリック)の下部からコピーできる → `SLACK_CHANNEL_ID`。
    - `go run ./cmd/api web api webui`(または prod 起動)で自動的にリスナーが起動する。トークン未設定時は何もせずスキップする。`SLACK_BOT_TOKEN` / `SLACK_CHANNEL_ID` のいずれかが未設定の場合、通知サマリの投稿もスキップされる(エラーにはしない)。
 7. **Go blog の要約・翻訳を試す**: Slack の bot に `@bot https://go.dev/blog/slices を要約して` のように話しかける。追加の環境変数は不要(読み取り専用ツール)。API 直叩きでも同様に呼び出せる:
