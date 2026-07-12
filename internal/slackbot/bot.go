@@ -111,7 +111,9 @@ func (l *Listener) Run(ctx context.Context) error {
 					continue
 				}
 				if evt.Request != nil {
-					l.socket.Ack(*evt.Request)
+					if err := l.socket.Ack(*evt.Request); err != nil {
+						log.Printf("slackbot: ack failed: %v", err)
+					}
 				}
 				go l.handleEventsAPI(ctx, eventsAPIEvent)
 			}
