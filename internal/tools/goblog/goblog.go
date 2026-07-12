@@ -1,8 +1,9 @@
-// Package goblogtools exposes a tool that fetches a Go blog (https://go.dev/blog/)
-// post and returns its title and plain-text content. It does not summarize or
-// translate anything itself: the calling agent (an LLM) reads the returned
-// text and produces the summary/translation in its own reply, the same way
-// the gmail tools return raw message bodies for the agent to classify.
+// Package goblogtools exposes tools for the Go blog (https://go.dev/blog/):
+// fetching a single post's title and plain-text content, and listing recent
+// posts from the blog's Atom feed. Neither tool summarizes or translates
+// anything itself: the calling agent (an LLM) reads the returned data and
+// produces the summary/translation in its own reply, the same way the gmail
+// tools return raw message bodies for the agent to classify.
 package goblogtools
 
 import (
@@ -25,7 +26,8 @@ const allowedHost = "go.dev"
 // maxContentLen bounds how much article text is returned to the agent.
 const maxContentLen = 40000
 
-// Tools returns the go blog fetch tool.
+// Tools returns the go blog tools: fetching a single post by URL, and
+// listing recent posts from the blog's Atom feed.
 func Tools() ([]tool.Tool, error) {
 	fetchTool, err := functiontool.New(functiontool.Config{
 		Name:        "goblog_fetch_post",
@@ -34,7 +36,14 @@ func Tools() ([]tool.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []tool.Tool{fetchTool}, nil
+	listTool, err := functiontool.New(functiontool.Config{
+		Name:        "goblog_list_posts",
+		Description: "List recent Go blog posts (title, URL, published date) from the go.dev blog's Atom feed, for use when the caller wants recent posts but hasn't given a specific URL. Read-only; only go.dev is accessed.",
+	}, listPosts())
+	if err != nil {
+		return nil, err
+	}
+	return []tool.Tool{fetchTool, listTool}, nil
 }
 
 type fetchInput struct {
@@ -62,25 +71,37 @@ func fetchPost() functiontool.Func[fetchInput, fetchResult] {
 // takes a plain context.Context (tool.Context satisfies it) so it can be
 // exercised directly in tests without constructing an ADK tool.Context.
 func fetch(ctx context.Context, rawURL string) (title, content string, err error) {
+	body, err := httpGet(ctx, rawURL)
+	if err != nil {
+		return "", "", err
+	}
+	defer body.Close()
+	return parseArticle(body)
+}
+
+// httpGet validates that rawURL points at allowedHost and returns the
+// response body of a GET request. Shared by fetch (post pages) and
+// fetchFeed (the blog index feed) so the go.dev host restriction is
+// enforced in exactly one place.
+func httpGet(ctx context.Context, rawURL string) (io.ReadCloser, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() != allowedHost {
-		return "", "", fmt.Errorf("url must be an https://%s/... link", allowedHost)
+		return nil, fmt.Errorf("url must be an https://%s/... link", allowedHost)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("fetch %s: unexpected status %d", u, resp.StatusCode)
+		resp.Body.Close()
+		return nil, fmt.Errorf("fetch %s: unexpected status %d", u, resp.StatusCode)
 	}
-
-	return parseArticle(resp.Body)
+	return resp.Body, nil
 }
 
 // parseArticle extracts the title and main article text out of an HTML
