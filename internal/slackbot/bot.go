@@ -16,6 +16,8 @@ import (
 
 	"github.com/o-ga09/adk-go-sample/internal/config"
 	"github.com/o-ga09/adk-go-sample/internal/llmusage"
+	"github.com/o-ga09/adk-go-sample/internal/slackfmt"
+	goblogtools "github.com/o-ga09/adk-go-sample/internal/tools/goblog"
 	notifytools "github.com/o-ga09/adk-go-sample/internal/tools/notify"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -112,31 +114,33 @@ func (l *Listener) handleEventsAPI(ctx context.Context, outer slackevents.Events
 	}
 
 	if l.app.SlackAllowedUserID != "" && mention.User != l.app.SlackAllowedUserID {
-		l.reply(ctx, mention, "すみません、このエージェントは登録済みユーザーのみ利用できます。")
+		l.reply(ctx, mention, slackfmt.Sections("すみません、このエージェントは登録済みユーザーのみ利用できます。"))
 		return
 	}
 
 	text := mentionRE.ReplaceAllString(mention.Text, "")
 	text = strings.TrimSpace(text)
 	if text == "" {
-		l.reply(ctx, mention, "ご用件をメンションの後に書いてください。例: 「@agent 受信トレイを整理して」")
+		l.reply(ctx, mention, slackfmt.Sections("ご用件をメンションの後に書いてください。例: 「@agent 受信トレイを整理して」"))
 		return
 	}
 
-	reply, err := l.ask(ctx, mention, text)
+	blocks, err := l.ask(ctx, mention, text)
 	if err != nil {
 		log.Printf("slackbot: agent run failed: %v", err)
-		reply = fmt.Sprintf("エラーが発生しました: %v", err)
+		blocks = slackfmt.Sections(fmt.Sprintf("エラーが発生しました: %v", err))
 	}
-	if reply == "" {
+	if blocks == nil {
 		return // summary already delivered into the thread by slack_push
 	}
-	l.reply(ctx, mention, reply)
+	l.reply(ctx, mention, blocks)
 }
 
 // ask runs the agent with text as the user's message, reusing one ADK
-// session per Slack thread so multi-turn conversations keep context.
-func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent, text string) (string, error) {
+// session per Slack thread so multi-turn conversations keep context. It
+// returns nil blocks (and no error) when the agent already delivered its
+// reply itself via slack_push, so handleEventsAPI knows not to post again.
+func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent, text string) ([]slack.Block, error) {
 	// Tags every LLM call made while handling this request as
 	// llmusage.TriggerSlack instead of the default TriggerAPI, so the daily
 	// cost report can break usage down by trigger surface.
@@ -166,7 +170,7 @@ func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent
 				notifytools.StateKeySlackThreadTS: threadKey,
 			},
 		}); err != nil {
-			return "", fmt.Errorf("create session: %w", err)
+			return nil, fmt.Errorf("create session: %w", err)
 		}
 	}
 
@@ -174,9 +178,10 @@ func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent
 
 	var lastText string
 	var summaryPosted bool
+	var fetchedTitle, fetchedURL string
 	for ev, err := range l.run.Run(ctx, userID, sessionID, msg, agent.RunConfig{}) {
 		if err != nil {
-			return "", fmt.Errorf("agent run: %w", err)
+			return nil, fmt.Errorf("agent run: %w", err)
 		}
 		if ev != nil && ev.Content != nil {
 			for _, p := range ev.Content.Parts {
@@ -185,12 +190,24 @@ func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent
 				}
 				if p.FunctionCall != nil {
 					log.Printf("slackbot: [%s] tool-call: %s", ev.Author, p.FunctionCall.Name)
+					if p.FunctionCall.Name == goblogtools.ToolNameFetchPost {
+						if u, _ := p.FunctionCall.Args["url"].(string); u != "" {
+							fetchedURL = u
+						}
+					}
 				}
 				if p.FunctionResponse != nil {
 					log.Printf("slackbot: [%s] tool-response: %s %s", ev.Author, p.FunctionResponse.Name, compactJSON(p.FunctionResponse.Response))
 					if p.FunctionResponse.Name == notifytools.ToolNameSlackPush {
 						if s, _ := p.FunctionResponse.Response["status"].(string); s == notifytools.StatusSlackPushSent {
 							summaryPosted = true
+						}
+					}
+					if p.FunctionResponse.Name == goblogtools.ToolNameFetchPost {
+						if s, _ := p.FunctionResponse.Response["status"].(string); s == goblogtools.StatusSuccess {
+							if t, _ := p.FunctionResponse.Response["title"].(string); t != "" {
+								fetchedTitle = t
+							}
 						}
 					}
 				}
@@ -203,11 +220,31 @@ func (l *Listener) ask(ctx context.Context, mention *slackevents.AppMentionEvent
 		// final text; replying "(応答がありませんでした)" on top of the summary
 		// reads like a failure. Only fall back when nothing was delivered.
 		if summaryPosted {
-			return "", nil
+			return nil, nil
 		}
 		lastText = "(応答がありませんでした)"
 	}
-	return lastText, nil
+	return replyBlocks(fetchedTitle, fetchedURL, lastText), nil
+}
+
+// replyBlocks builds the Slack Block Kit blocks for a reply. When title is
+// non-empty (a goblog_fetch_post article was fetched during this turn), the
+// message leads with a header and, if url is also known, a context block
+// linking to the source article, then a divider, so the summary/translation
+// body in text is visually separated from that metadata. Otherwise text
+// (a conversational reply or error message) is rendered as plain section
+// block(s) with no header.
+func replyBlocks(title, url, text string) []slack.Block {
+	if title == "" {
+		return slackfmt.Sections(text)
+	}
+	blocks := []slack.Block{slackfmt.Header(title)}
+	if url != "" {
+		blocks = append(blocks, slackfmt.Context(url))
+	}
+	blocks = append(blocks, slackfmt.Divider())
+	blocks = append(blocks, slackfmt.Sections(text)...)
+	return slackfmt.Limit(blocks)
 }
 
 // compactJSON renders a tool's response map for the pod log so failures
@@ -235,12 +272,12 @@ func compactJSON(v map[string]any) string {
 	return string(b)
 }
 
-func (l *Listener) reply(ctx context.Context, mention *slackevents.AppMentionEvent, text string) {
+func (l *Listener) reply(ctx context.Context, mention *slackevents.AppMentionEvent, blocks []slack.Block) {
 	threadTS := mention.ThreadTimeStamp
 	if threadTS == "" {
 		threadTS = mention.TimeStamp
 	}
-	if _, _, err := l.api.PostMessageContext(ctx, mention.Channel, slack.MsgOptionText(text, false), slack.MsgOptionTS(threadTS)); err != nil {
+	if _, _, err := l.api.PostMessageContext(ctx, mention.Channel, slack.MsgOptionBlocks(blocks...), slack.MsgOptionTS(threadTS)); err != nil {
 		log.Printf("slackbot: failed to post reply: %v", err)
 	}
 }
