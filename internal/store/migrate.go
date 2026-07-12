@@ -104,6 +104,7 @@ func Migrate(dsn string) error {
 		&eventSchema{},
 		&appStateSchema{},
 		&userStateSchema{},
+		&Task{},
 	); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
 	}

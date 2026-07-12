@@ -5,6 +5,7 @@ go 1.25.8
 require (
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/google/jsonschema-go v0.3.0
+	github.com/google/uuid v1.6.0
 	github.com/slack-go/slack v0.27.0
 	golang.org/x/net v0.56.0
 	golang.org/x/oauth2 v0.36.0
@@ -29,7 +30,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.16 // indirect
 	github.com/googleapis/gax-go/v2 v2.22.0 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
