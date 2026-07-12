@@ -38,7 +38,7 @@ func main() {
 	}
 
 	if c.SlackBotToken != "" && c.SlackAppToken != "" {
-		bot, err := slackbot.New(slackbot.Config{
+		bot, err := slackbot.New(ctx, slackbot.Config{
 			App:             c,
 			Agent:           deps.Agent,
 			SessionService:  deps.SessionService,
