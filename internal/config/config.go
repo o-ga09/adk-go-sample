@@ -59,6 +59,11 @@ type Config struct {
 	// warning.
 	LLMPricingJSON       string
 	LLMCostDailyAlertUSD float64
+
+	// GTD weekly review (internal/weeklyreview). WeeklyReviewStaleDays is how
+	// many days a next/waiting task may go untouched before the weekly
+	// review flags it as stalled.
+	WeeklyReviewStaleDays int
 }
 
 // Load reads configuration from the environment, applying sensible defaults.
@@ -80,6 +85,8 @@ func Load() *Config {
 
 		LLMPricingJSON:       os.Getenv("LLM_PRICING_JSON"),
 		LLMCostDailyAlertUSD: envOrFloat("LLM_COST_DAILY_ALERT_USD", 0),
+
+		WeeklyReviewStaleDays: envOrInt("WEEKLY_REVIEW_STALE_DAYS", 14),
 	}
 	return c
 }
@@ -130,4 +137,17 @@ func envOrFloat(key string, def float64) float64 {
 		return def
 	}
 	return f
+}
+
+// envOrInt parses key as an int, falling back to def if unset or unparseable.
+func envOrInt(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
 }

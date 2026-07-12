@@ -86,6 +86,26 @@ func NewTaskStore(dsn string) (TaskStore, error) {
 	return &gormTaskStore{db: db}, nil
 }
 
+// SortByPriority returns tasks ordered for a "what should I do now"
+// suggestion: overdue tasks first (most overdue first), then upcoming due
+// dates soonest-first, then tasks with no due date at all (oldest-created
+// first, GTD's usual FIFO tiebreak). It does not mutate tasks.
+func SortByPriority(tasks []Task) []Task {
+	out := make([]Task, len(tasks))
+	copy(out, tasks)
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if (a.Due == nil) != (b.Due == nil) {
+			return a.Due != nil // a task with a due date always outranks one without
+		}
+		if a.Due != nil {
+			return a.Due.Before(*b.Due)
+		}
+		return a.CreateTime.Before(b.CreateTime)
+	})
+	return out
+}
+
 func applyTaskPatch(t *Task, patch TaskPatch) {
 	if patch.Status != nil {
 		t.Status = *patch.Status
