@@ -15,8 +15,9 @@ import (
 	"strings"
 
 	"golang.org/x/net/html"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 )
 
 // allowedHost restricts fetches to the official Go blog, so this read-only
@@ -66,18 +67,18 @@ type fetchResult struct {
 }
 
 func fetchPost() functiontool.Func[fetchInput, fetchResult] {
-	return func(ctx tool.Context, in fetchInput) fetchResult {
+	return func(ctx agent.Context, in fetchInput) (fetchResult, error) {
 		title, content, err := fetch(ctx, in.URL)
 		if err != nil {
-			return fetchResult{Status: "error", Error: err.Error()}
+			return fetchResult{Status: "error", Error: err.Error()}, nil
 		}
-		return fetchResult{Title: title, Content: content, Status: StatusSuccess}
+		return fetchResult{Title: title, Content: content, Status: StatusSuccess}, nil
 	}
 }
 
 // fetch downloads a go.dev page and extracts its title and article text. It
-// takes a plain context.Context (tool.Context satisfies it) so it can be
-// exercised directly in tests without constructing an ADK tool.Context.
+// takes a plain context.Context (agent.Context satisfies it) so it can be
+// exercised directly in tests without constructing an ADK agent.Context.
 func fetch(ctx context.Context, rawURL string) (title, content string, err error) {
 	body, err := httpGet(ctx, rawURL)
 	if err != nil {

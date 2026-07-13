@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// The ADK's database session service (google.golang.org/adk/session/database)
+// The ADK's database session service (google.golang.org/adk/v2/session/database)
 // never runs AutoMigrate outside its own tests, so the tables must be created
 // out-of-band before the pods start. The structs below mirror the ADK's
 // unexported storage structs (storage_session.go) field-for-field; the
@@ -54,8 +54,16 @@ type eventSchema struct {
 	Author                 string
 	Actions                []byte
 	LongRunningToolIDsJSON string `gorm:"type:longtext"`
-	Branch                 *string
-	Timestamp              time.Time `gorm:"type:datetime(6);precision:6"`
+	// Added in ADK v2 (storageEvent gained these dynamicJSON columns for the
+	// workflow/graph execution fields): mirror them so AutoMigrate adds the
+	// columns and the ADK's inserts don't hit unknown-column errors.
+	RoutesJSON         string `gorm:"type:longtext"`
+	OutputJSON         string `gorm:"type:longtext"`
+	NodeInfoJSON       string `gorm:"type:longtext"`
+	RequestedInputJSON string `gorm:"type:longtext"`
+	Branch             *string
+	IsolationScope     *string   // added in ADK v2
+	Timestamp          time.Time `gorm:"type:datetime(6);precision:6"`
 
 	Content           string `gorm:"type:longtext"`
 	GroundingMetadata string `gorm:"type:longtext"`

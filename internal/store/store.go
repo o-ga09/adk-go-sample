@@ -8,8 +8,8 @@ import (
 
 	sqlmysql "github.com/go-sql-driver/mysql"
 	"github.com/o-ga09/adk-go-sample/internal/config"
-	"google.golang.org/adk/session"
-	"google.golang.org/adk/session/database"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/session/database"
 	"gorm.io/driver/mysql"
 )
 

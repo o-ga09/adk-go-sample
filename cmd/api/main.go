@@ -16,11 +16,10 @@ import (
 	"github.com/o-ga09/adk-go-sample/internal/app"
 	"github.com/o-ga09/adk-go-sample/internal/config"
 	"github.com/o-ga09/adk-go-sample/internal/slackbot"
-	"google.golang.org/adk/cmd/launcher"
-	"google.golang.org/adk/cmd/launcher/adk"
-	"google.golang.org/adk/cmd/launcher/full"
-	"google.golang.org/adk/cmd/launcher/prod"
-	"google.golang.org/adk/server/restapi/services"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/cmd/launcher"
+	"google.golang.org/adk/v2/cmd/launcher/full"
+	"google.golang.org/adk/v2/cmd/launcher/prod"
 )
 
 func main() {
@@ -32,10 +31,7 @@ func main() {
 		log.Fatalf("failed to build app: %v", err)
 	}
 
-	agentLoader, err := services.NewMultiAgentLoader(deps.Agent)
-	if err != nil {
-		log.Fatalf("failed to create agent loader: %v", err)
-	}
+	agentLoader := agent.NewSingleLoader(deps.Agent)
 
 	if c.SlackBotToken != "" && c.SlackAppToken != "" {
 		bot, err := slackbot.New(ctx, slackbot.Config{
@@ -56,7 +52,7 @@ func main() {
 		log.Print("slack bot disabled: SLACK_BOT_TOKEN/SLACK_APP_TOKEN not set")
 	}
 
-	cfg := &adk.Config{
+	cfg := &launcher.Config{
 		ArtifactService: deps.ArtifactService,
 		SessionService:  deps.SessionService,
 		AgentLoader:     agentLoader,
@@ -64,7 +60,7 @@ func main() {
 
 	var l launcher.Launcher
 	if os.Getenv("ADK_LAUNCHER") == "prod" {
-		l = prod.NewLaucher() // API + A2A, no Web UI (headless)
+		l = prod.NewLauncher() // API + A2A, no Web UI (headless)
 	} else {
 		l = full.NewLauncher() // console + Web UI + API (dev)
 	}

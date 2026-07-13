@@ -13,17 +13,24 @@ When defining tool input/output structs in `internal/tools/`:
   `required` in the inferred schema, so the LLM omitting one (e.g.
   `maxResults`, or `events` on a day with no calendar registrations) fails the
   call before the handler even runs.
-- **Result slices must never serialize to `null`.** A nil slice without
-  `omitempty` fails validation (`got null, want array`) even though the
-  handler succeeded. Give result slices `omitempty` (or always assign an empty
-  slice).
+- **Result slices must never serialize to `null`.** Give result slices
+  `omitempty` (or always assign an empty slice). Historically a nil slice
+  without `omitempty` failed validation outright (`got null, want array`) even
+  though the handler succeeded; jsonschema-go v0.4.x relaxed this and now
+  accepts `null` for arrays, but keep `omitempty` regardless — a `null` in the
+  result JSON is still noise the LLM shouldn't have to reason about, and the
+  invariant must not silently depend on the looser validator.
 - Fields the handler genuinely cannot work without (`query`, `messageId`,
   RFC3339 times) should stay required — schema rejection with a clear message
   is better than the handler failing oddly.
 
 Regression tests in `internal/tools/{gmail,calendar,notify}` replay this
 validation (`jsonschema.For` → `Resolve` → `Validate`) against representative
-payloads; extend them when adding tools or fields. Note the project pins
-`github.com/google/jsonschema-go` v0.3.0, whose validator is stricter than
-later versions (v0.4.x accepts `null` for arrays) — do not assume an upgrade
-fixed this class of bug.
+payloads; extend them when adding tools or fields. The project uses
+`github.com/google/jsonschema-go` v0.4.2 (pulled in by `google.golang.org/adk/v2`;
+before the ADK v2 migration it was pinned to the stricter v0.3.0). v0.4.x's
+validator is looser — notably it accepts `null` for arrays — so the regression
+tests assert the *positive* case (representative payloads validate) rather than
+relying on the validator to reject `null`. Keep the `omitempty` invariants above
+independent of validator strictness; do not loosen a struct tag just because the
+current validator would tolerate it.

@@ -7,8 +7,9 @@ import (
 	"time"
 
 	"github.com/o-ga09/adk-go-sample/internal/config"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 	calendar "google.golang.org/api/calendar/v3"
 )
 
@@ -63,19 +64,19 @@ type createResult struct {
 }
 
 func createEvent(svc *calendar.Service, mode config.ActionMode) functiontool.Func[createInput, createResult] {
-	return func(ctx tool.Context, in createInput) createResult {
+	return func(ctx agent.Context, in createInput) (createResult, error) {
 		// De-dup: if an event already references this message id, skip.
 		if in.SrcMessageID != "" {
 			existing, err := svc.Events.List(primaryCalendar).
 				PrivateExtendedProperty(srcMsgKey + "=" + in.SrcMessageID).
 				MaxResults(1).Context(ctx).Do()
 			if err == nil && existing != nil && len(existing.Items) > 0 {
-				return createResult{EventID: existing.Items[0].Id, Status: "already_exists"}
+				return createResult{EventID: existing.Items[0].Id, Status: "already_exists"}, nil
 			}
 		}
 
 		if mode == config.ModeDryRun {
-			return createResult{Status: "dry_run_would_create"}
+			return createResult{Status: "dry_run_would_create"}, nil
 		}
 
 		event := &calendar.Event{
@@ -92,9 +93,9 @@ func createEvent(svc *calendar.Service, mode config.ActionMode) functiontool.Fun
 		}
 		created, err := svc.Events.Insert(primaryCalendar, event).Context(ctx).Do()
 		if err != nil {
-			return createResult{Status: "error", Error: err.Error()}
+			return createResult{Status: "error", Error: err.Error()}, nil
 		}
-		return createResult{EventID: created.Id, HTMLink: created.HtmlLink, Status: "created"}
+		return createResult{EventID: created.Id, HTMLink: created.HtmlLink, Status: "created"}, nil
 	}
 }
 
@@ -124,14 +125,14 @@ type listEventsResult struct {
 }
 
 func listEvents(svc *calendar.Service) functiontool.Func[listEventsInput, listEventsResult] {
-	return func(ctx tool.Context, in listEventsInput) listEventsResult {
+	return func(ctx agent.Context, in listEventsInput) (listEventsResult, error) {
 		timeMin, timeMax := resolveWindow(in, time.Now())
 		resp, err := svc.Events.List(primaryCalendar).
 			TimeMin(timeMin).TimeMax(timeMax).
 			SingleEvents(true).OrderBy("startTime").
 			Context(ctx).Do()
 		if err != nil {
-			return listEventsResult{Status: "error", Error: err.Error()}
+			return listEventsResult{Status: "error", Error: err.Error()}, nil
 		}
 		out := listEventsResult{Status: "success"}
 		for _, e := range resp.Items {
@@ -142,7 +143,7 @@ func listEvents(svc *calendar.Service) functiontool.Func[listEventsInput, listEv
 				HTMLLink: e.HtmlLink,
 			})
 		}
-		return out
+		return out, nil
 	}
 }
 

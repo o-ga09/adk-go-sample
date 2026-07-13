@@ -14,8 +14,9 @@ import (
 	"github.com/o-ga09/adk-go-sample/internal/config"
 	"github.com/o-ga09/adk-go-sample/internal/slackfmt"
 	"github.com/slack-go/slack"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 )
 
 // gmailMessageLinkPrefix, followed by a Gmail message id, opens that message
@@ -150,8 +151,8 @@ type slackPushInput struct {
 
 func slackPush(c *config.Config) functiontool.Func[slackPushInput, pushResult] {
 	client := slack.New(c.SlackBotToken)
-	return func(ctx tool.Context, in slackPushInput) pushResult {
-		return postBlocks(ctx, c, client, summaryBlocks(in))
+	return func(ctx agent.Context, in slackPushInput) (pushResult, error) {
+		return postBlocks(ctx, c, client, summaryBlocks(in)), nil
 	}
 }
 
@@ -166,8 +167,8 @@ type calendarDigestInput struct {
 
 func calendarDigestPush(c *config.Config) functiontool.Func[calendarDigestInput, pushResult] {
 	client := slack.New(c.SlackBotToken)
-	return func(ctx tool.Context, in calendarDigestInput) pushResult {
-		return postBlocks(ctx, c, client, calendarDigestBlocks(in))
+	return func(ctx agent.Context, in calendarDigestInput) (pushResult, error) {
+		return postBlocks(ctx, c, client, calendarDigestBlocks(in)), nil
 	}
 }
 
@@ -187,8 +188,8 @@ type goblogSummaryPushInput struct {
 
 func goblogSummaryPush(c *config.Config) functiontool.Func[goblogSummaryPushInput, pushResult] {
 	client := slack.New(c.SlackBotToken)
-	return func(ctx tool.Context, in goblogSummaryPushInput) pushResult {
-		return postBlocks(ctx, c, client, goblogSummaryBlocks(in))
+	return func(ctx agent.Context, in goblogSummaryPushInput) (pushResult, error) {
+		return postBlocks(ctx, c, client, goblogSummaryBlocks(in)), nil
 	}
 }
 
@@ -217,8 +218,8 @@ type goblogListPushInput struct {
 
 func goblogListPush(c *config.Config) functiontool.Func[goblogListPushInput, pushResult] {
 	client := slack.New(c.SlackBotToken)
-	return func(ctx tool.Context, in goblogListPushInput) pushResult {
-		return postBlocks(ctx, c, client, goblogListBlocks(in))
+	return func(ctx agent.Context, in goblogListPushInput) (pushResult, error) {
+		return postBlocks(ctx, c, client, goblogListBlocks(in)), nil
 	}
 }
 
@@ -244,8 +245,8 @@ type taskListPushInput struct {
 
 func taskListPush(c *config.Config) functiontool.Func[taskListPushInput, pushResult] {
 	client := slack.New(c.SlackBotToken)
-	return func(ctx tool.Context, in taskListPushInput) pushResult {
-		return postBlocks(ctx, c, client, taskListBlocks(in))
+	return func(ctx agent.Context, in taskListPushInput) (pushResult, error) {
+		return postBlocks(ctx, c, client, taskListBlocks(in)), nil
 	}
 }
 
@@ -271,8 +272,8 @@ type taskActionPushInput struct {
 
 func taskActionPush(c *config.Config) functiontool.Func[taskActionPushInput, pushResult] {
 	client := slack.New(c.SlackBotToken)
-	return func(ctx tool.Context, in taskActionPushInput) pushResult {
-		return postBlocks(ctx, c, client, taskActionBlocks(in))
+	return func(ctx agent.Context, in taskActionPushInput) (pushResult, error) {
+		return postBlocks(ctx, c, client, taskActionBlocks(in)), nil
 	}
 }
 
@@ -288,7 +289,7 @@ type pushResult struct {
 // top-level message when there is no request-scoped thread (the batch/cron
 // paths, or a REST API call with no Slack origin). Shared by every *_push
 // tool in this file.
-func postBlocks(ctx tool.Context, c *config.Config, client *slack.Client, blocks []slack.Block) pushResult {
+func postBlocks(ctx agent.Context, c *config.Config, client *slack.Client, blocks []slack.Block) pushResult {
 	channel, threadTS := requestOrigin(ctx)
 	if channel == "" {
 		channel = c.SlackChannelID
@@ -310,11 +311,11 @@ func postBlocks(ctx tool.Context, c *config.Config, client *slack.Client, blocks
 // requestOrigin reads the Slack channel/thread the current request came from
 // out of session state. Both values are empty for the batch and REST API
 // paths, which never set them.
-func requestOrigin(ctx tool.Context) (channel, threadTS string) {
+func requestOrigin(ctx agent.Context) (channel, threadTS string) {
 	return stateString(ctx, StateKeySlackChannel), stateString(ctx, StateKeySlackThreadTS)
 }
 
-func stateString(ctx tool.Context, key string) string {
+func stateString(ctx agent.Context, key string) string {
 	v, err := ctx.State().Get(key)
 	if err != nil {
 		return ""
