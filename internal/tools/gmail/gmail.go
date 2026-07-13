@@ -1,6 +1,6 @@
 // Package gmailtools exposes Gmail operations to the agent as ADK function
 // tools. The Gmail client is captured in a closure at construction time because
-// ADK tool handlers only receive (tool.Context, TArgs).
+// ADK tool handlers only receive (agent.Context, TArgs).
 package gmailtools
 
 import (
@@ -9,8 +9,9 @@ import (
 	"strings"
 
 	"github.com/o-ga09/adk-go-sample/internal/config"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 	gmail "google.golang.org/api/gmail/v1"
 )
 
@@ -95,14 +96,14 @@ type listResult struct {
 }
 
 func listMessages(svc *gmail.Service) functiontool.Func[listInput, listResult] {
-	return func(ctx tool.Context, in listInput) listResult {
+	return func(ctx agent.Context, in listInput) (listResult, error) {
 		max := in.MaxResults
 		if max <= 0 || max > 50 {
 			max = 25
 		}
 		resp, err := svc.Users.Messages.List(gmailUser).Q(in.Query).MaxResults(max).Context(ctx).Do()
 		if err != nil {
-			return listResult{Status: "error", Error: err.Error()}
+			return listResult{Status: "error", Error: err.Error()}, nil
 		}
 		out := listResult{Status: "success"}
 		for _, m := range resp.Messages {
@@ -121,7 +122,7 @@ func listMessages(svc *gmail.Service) functiontool.Func[listInput, listResult] {
 				Snippet: full.Snippet,
 			})
 		}
-		return out
+		return out, nil
 	}
 }
 
@@ -142,10 +143,10 @@ type getResult struct {
 }
 
 func getMessage(svc *gmail.Service) functiontool.Func[getInput, getResult] {
-	return func(ctx tool.Context, in getInput) getResult {
+	return func(ctx agent.Context, in getInput) (getResult, error) {
 		full, err := svc.Users.Messages.Get(gmailUser, in.ID).Format("full").Context(ctx).Do()
 		if err != nil {
-			return getResult{Status: "error", Error: err.Error()}
+			return getResult{Status: "error", Error: err.Error()}, nil
 		}
 		body := extractBody(full.Payload)
 		if len(body) > 4000 {
@@ -158,7 +159,7 @@ func getMessage(svc *gmail.Service) functiontool.Func[getInput, getResult] {
 			Date:    header(full, "Date"),
 			Body:    body,
 			Status:  "success",
-		}
+		}, nil
 	}
 }
 
@@ -176,16 +177,16 @@ type ensureLabelResult struct {
 }
 
 func ensureLabel(svc *gmail.Service, mode config.ActionMode) functiontool.Func[ensureLabelInput, ensureLabelResult] {
-	return func(ctx tool.Context, in ensureLabelInput) ensureLabelResult {
+	return func(ctx agent.Context, in ensureLabelInput) (ensureLabelResult, error) {
 		id, err := resolveLabelID(ctx, svc, in.Name)
 		if err != nil {
-			return ensureLabelResult{Status: "error", Error: err.Error()}
+			return ensureLabelResult{Status: "error", Error: err.Error()}, nil
 		}
 		if id != "" {
-			return ensureLabelResult{LabelID: id, Name: in.Name, Status: "exists"}
+			return ensureLabelResult{LabelID: id, Name: in.Name, Status: "exists"}, nil
 		}
 		if mode == config.ModeDryRun {
-			return ensureLabelResult{Name: in.Name, Status: "dry_run_would_create"}
+			return ensureLabelResult{Name: in.Name, Status: "dry_run_would_create"}, nil
 		}
 		created, err := svc.Users.Labels.Create(gmailUser, &gmail.Label{
 			Name:                  in.Name,
@@ -193,9 +194,9 @@ func ensureLabel(svc *gmail.Service, mode config.ActionMode) functiontool.Func[e
 			MessageListVisibility: "show",
 		}).Context(ctx).Do()
 		if err != nil {
-			return ensureLabelResult{Status: "error", Error: err.Error()}
+			return ensureLabelResult{Status: "error", Error: err.Error()}, nil
 		}
-		return ensureLabelResult{LabelID: created.Id, Name: in.Name, Status: "created"}
+		return ensureLabelResult{LabelID: created.Id, Name: in.Name, Status: "created"}, nil
 	}
 }
 
@@ -213,25 +214,25 @@ type applyLabelResult struct {
 }
 
 func applyLabel(svc *gmail.Service, mode config.ActionMode) functiontool.Func[applyLabelInput, applyLabelResult] {
-	return func(ctx tool.Context, in applyLabelInput) applyLabelResult {
+	return func(ctx agent.Context, in applyLabelInput) (applyLabelResult, error) {
 		if mode == config.ModeDryRun {
-			return applyLabelResult{Status: fmt.Sprintf("dry_run_would_apply_%s_to_%s", in.LabelName, in.MessageID)}
+			return applyLabelResult{Status: fmt.Sprintf("dry_run_would_apply_%s_to_%s", in.LabelName, in.MessageID)}, nil
 		}
 		labelID, err := resolveLabelID(ctx, svc, in.LabelName)
 		if err != nil {
-			return applyLabelResult{Status: "error", Error: err.Error()}
+			return applyLabelResult{Status: "error", Error: err.Error()}, nil
 		}
 		if labelID == "" {
-			return applyLabelResult{Status: "error", Error: "label does not exist; call gmail_ensure_label first"}
+			return applyLabelResult{Status: "error", Error: "label does not exist; call gmail_ensure_label first"}, nil
 		}
 		req := &gmail.ModifyMessageRequest{AddLabelIds: []string{labelID}}
 		if in.RemoveFromInbox {
 			req.RemoveLabelIds = []string{"INBOX"}
 		}
 		if _, err := svc.Users.Messages.Modify(gmailUser, in.MessageID, req).Context(ctx).Do(); err != nil {
-			return applyLabelResult{Status: "error", Error: err.Error()}
+			return applyLabelResult{Status: "error", Error: err.Error()}, nil
 		}
-		return applyLabelResult{Status: "applied"}
+		return applyLabelResult{Status: "applied"}, nil
 	}
 }
 
@@ -247,20 +248,20 @@ type trashResult struct {
 }
 
 func trashMessage(svc *gmail.Service, mode config.ActionMode) functiontool.Func[trashInput, trashResult] {
-	return func(ctx tool.Context, in trashInput) trashResult {
+	return func(ctx agent.Context, in trashInput) (trashResult, error) {
 		if mode != config.ModeAutoTrash {
-			return trashResult{Status: "disabled"}
+			return trashResult{Status: "disabled"}, nil
 		}
 		if _, err := svc.Users.Messages.Trash(gmailUser, in.MessageID).Context(ctx).Do(); err != nil {
-			return trashResult{Status: "error", Error: err.Error()}
+			return trashResult{Status: "error", Error: err.Error()}, nil
 		}
-		return trashResult{Status: "trashed"}
+		return trashResult{Status: "trashed"}, nil
 	}
 }
 
 // ---- helpers ----
 
-func resolveLabelID(ctx tool.Context, svc *gmail.Service, name string) (string, error) {
+func resolveLabelID(ctx agent.Context, svc *gmail.Service, name string) (string, error) {
 	resp, err := svc.Users.Labels.List(gmailUser).Context(ctx).Do()
 	if err != nil {
 		return "", err

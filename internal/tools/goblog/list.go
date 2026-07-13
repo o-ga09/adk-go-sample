@@ -5,8 +5,8 @@ import (
 	"encoding/xml"
 	"io"
 
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool/functiontool"
 )
 
 // feedURL is the go.dev blog's Atom feed. It is not derived from any
@@ -38,16 +38,16 @@ type listPostsResult struct {
 }
 
 func listPosts() functiontool.Func[listPostsInput, listPostsResult] {
-	return func(ctx tool.Context, in listPostsInput) listPostsResult {
+	return func(ctx agent.Context, in listPostsInput) (listPostsResult, error) {
 		posts, err := fetchFeed(ctx)
 		if err != nil {
-			return listPostsResult{Status: "error", Error: err.Error()}
+			return listPostsResult{Status: "error", Error: err.Error()}, nil
 		}
 		max := clampMaxResults(in.MaxResults)
 		if int64(len(posts)) > max {
 			posts = posts[:max]
 		}
-		return listPostsResult{Posts: posts, Status: "success"}
+		return listPostsResult{Posts: posts, Status: "success"}, nil
 	}
 }
 

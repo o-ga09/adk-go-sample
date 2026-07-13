@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A personal secretary agent built with ADK for Go (`google.golang.org/adk`) + Gemini. The first feature is a Gmail triage agent: it classifies incoming mail into "needs review / unwanted / has schedule", labels unwanted mail, registers events in Google Calendar, and sends a summary via a Slack Bot (`chat.postMessage`), with needs-review mail linked to Gmail and calendar registrations linked to the event. The same agent also fetches, summarizes, and translates Go blog (`go.dev/blog/...`) posts on request — typically invoked via the Slack `@mention` listener. README.md (Japanese) has the full env-var table and setup walkthrough.
+A personal secretary agent built with ADK for Go (`google.golang.org/adk/v2`) + Gemini. The first feature is a Gmail triage agent: it classifies incoming mail into "needs review / unwanted / has schedule", labels unwanted mail, registers events in Google Calendar, and sends a summary via a Slack Bot (`chat.postMessage`), with needs-review mail linked to Gmail and calendar registrations linked to the event. The same agent also fetches, summarizes, and translates Go blog (`go.dev/blog/...`) posts on request — typically invoked via the Slack `@mention` listener. README.md (Japanese) has the full env-var table and setup walkthrough.
 
 ## Commands
 

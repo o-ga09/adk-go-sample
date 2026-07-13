@@ -11,8 +11,9 @@ import (
 
 	"github.com/o-ga09/adk-go-sample/internal/config"
 	"github.com/o-ga09/adk-go-sample/internal/store"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 )
 
 // Tools returns the GTD task tools, wired to the given store and action
@@ -84,14 +85,14 @@ type addResult struct {
 }
 
 func taskAdd(st store.TaskStore, mode config.ActionMode) functiontool.Func[addInput, addResult] {
-	return func(ctx tool.Context, in addInput) addResult {
-		return doTaskAdd(ctx, st, mode, in)
+	return func(ctx agent.Context, in addInput) (addResult, error) {
+		return doTaskAdd(ctx, st, mode, in), nil
 	}
 }
 
 // doTaskAdd holds task_add's logic as a plain function (context.Context, not
-// tool.Context) so it is directly unit-testable without constructing an ADK
-// tool.Context.
+// agent.Context) so it is directly unit-testable without constructing an ADK
+// agent.Context.
 func doTaskAdd(ctx context.Context, st store.TaskStore, mode config.ActionMode, in addInput) addResult {
 	if in.SrcMessageID != "" {
 		if existing, err := st.FindBySrcMessageID(ctx, in.SrcMessageID); err == nil {
@@ -147,8 +148,8 @@ type listResult struct {
 }
 
 func taskList(st store.TaskStore) functiontool.Func[listInput, listResult] {
-	return func(ctx tool.Context, in listInput) listResult {
-		return doTaskList(ctx, st, in)
+	return func(ctx agent.Context, in listInput) (listResult, error) {
+		return doTaskList(ctx, st, in), nil
 	}
 }
 
@@ -185,8 +186,8 @@ type updateResult struct {
 }
 
 func taskUpdate(st store.TaskStore, mode config.ActionMode) functiontool.Func[updateInput, updateResult] {
-	return func(ctx tool.Context, in updateInput) updateResult {
-		return doTaskUpdate(ctx, st, mode, in)
+	return func(ctx agent.Context, in updateInput) (updateResult, error) {
+		return doTaskUpdate(ctx, st, mode, in), nil
 	}
 }
 
@@ -235,8 +236,8 @@ type completeResult struct {
 }
 
 func taskComplete(st store.TaskStore, mode config.ActionMode) functiontool.Func[completeInput, completeResult] {
-	return func(ctx tool.Context, in completeInput) completeResult {
-		return doTaskComplete(ctx, st, mode, in)
+	return func(ctx agent.Context, in completeInput) (completeResult, error) {
+		return doTaskComplete(ctx, st, mode, in), nil
 	}
 }
 

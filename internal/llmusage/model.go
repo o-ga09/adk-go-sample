@@ -5,8 +5,8 @@ import (
 	"iter"
 	"time"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/model"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/model"
 )
 
 // WrapModel decorates m so that every GenerateContent response carrying
