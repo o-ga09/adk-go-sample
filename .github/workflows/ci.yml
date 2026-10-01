@@ -4,18 +4,11 @@ name: ci
 # build-and-deploy.yml とは責務を分離: こちらはビルド・静的解析・テストの
 # 検証のみを行い、イメージの push やインフラリポジトリへの反映は行わない。
 
+# main への push 時の自動実行は運用停止 (2026-10-01) に伴い止めている。
+# pull_request はブランチ保護の必須チェック (lint-and-test / docker-build) のため残す。
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
-    paths:
-      - "cmd/**"
-      - "internal/**"
-      - "go.mod"
-      - "go.sum"
-      - "Dockerfile"
-      - ".github/workflows/ci.yml"
 
 permissions:
   contents: read
