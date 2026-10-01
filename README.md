@@ -1,5 +1,12 @@
 # adk-go-sample — 自分専用秘書エージェント
 
+> [!WARNING]
+> **このプロジェクトは運用を停止しています（2026-10-01）。**
+> インフラリポジトリ（`o-ga09/infra`）から secretary アプリ一式（API・CronWorkflow・マイグレーション Job）を削除し、
+> 後継として [Hermes Agent](https://github.com/NousResearch/hermes-agent) に置き換えました。
+> それに合わせて `build-and-deploy`（イメージ build とインフラリポジトリへの反映）の自動実行を止めています（手動実行のみ可能）。
+> `ci` は PR の必須チェックのため、Pull Request 時のみ実行されます。
+
 ADK for Go + Gemini で作る、自分専用の秘書エージェント。第一弾は **Gmail 整理エージェント**。
 
 - 受信メールを「要確認 / 不要 / 予定あり」に分類
